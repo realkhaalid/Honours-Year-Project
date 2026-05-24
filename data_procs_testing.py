@@ -25,7 +25,7 @@ if __name__ == "__main__":
 
     # Plot the log-mel spectrogram
     plt.figure(figsize=(10, 4))
-    lib.display.specshow(log_mel_spec, sr=22050, hop_length=HOPLENGTH, x_axis='time', y_axis='mel')
+    lib.display.specshow(log_mel_spec, sr=44100, hop_length=HOPLENGTH, x_axis='time', y_axis='mel')
     plt.colorbar(format='%+2.0f dB')
     plt.title('Log-Mel Spectrogram')
     plt.tight_layout()
