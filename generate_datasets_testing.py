@@ -19,8 +19,9 @@ def compute_log_mel_spectrogram(audio_path):
     return log_mel_spec
 
 def plot_log_mel_spectrogram(log_mel_spec, sr=44100):
+    log_mel_spec = log_mel_spec.detach().cpu().numpy()
     plt.figure(figsize=(10, 4))
-    lib.display.specshow(log_mel_spec, sr=sr, hop_length=HOPLENGTH, x_axis='time', y_axis='mel')
+    lib.display.specshow(log_mel_spec, sr=sr, hop_length=HOPLENGTH, x_axis='time', y_axis='mel', fmax=128)
     plt.colorbar(format='%+2.0f dB')
     plt.title('Log-Mel Spectrogram')
     plt.tight_layout()
@@ -28,7 +29,7 @@ def plot_log_mel_spectrogram(log_mel_spec, sr=44100):
 
 def save_log_mel_spectrogram(log_mel_spec, file_path, sr=44100):
     plt.figure(figsize=(10, 4))
-    lib.display.specshow(log_mel_spec, sr=sr, hop_length=HOPLENGTH, x_axis='time', y_axis='mel')
+    lib.display.specshow(log_mel_spec, sr=sr, hop_length=HOPLENGTH, x_axis='time', y_axis='mel', fmax=128)
     plt.colorbar(format='%+2.0f dB')
     plt.title('Log-Mel Spectrogram')
     plt.tight_layout()
