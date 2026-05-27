@@ -70,7 +70,7 @@ def check_positional_encoding(pos_encoding, embeddings_with_positional_informati
     print("Embeddings with positional information dtype:", embeddings_with_positional_information.dtype)
     print("Embeddings sample values:", embeddings[0, :5, :5])
     print("Embeddings with positional information sample values:", embeddings_with_positional_information[0, :5, :5])
-
+   
 if __name__ == "__main__":
     unsupervised_dataset_path = "archive"
     supervised_dataset_path = "archive"
