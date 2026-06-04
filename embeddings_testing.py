@@ -18,6 +18,7 @@ def convert_to_patches(spectrogram, patch_size=10):
     patches = spectrogram.reshape(n_freq_bins, n_patches, patch_size)
     patches = patches.permute(1, 0, 2)
     patches = patches.reshape(n_patches, n_freq_bins * patch_size)
+    patches = patches.unsqueeze(0)
     return patches
 
 def check_patch_shapes(patches):
@@ -29,7 +30,6 @@ def check_patch_shapes(patches):
     print("Torch tensor shape:", patches[0].shape)
 
 def convert_to_embeddings(patches, embedding_dim=128):
-    patches = patches.unsqueeze(0)
     patch_dim = patches.shape[-1]
     W_embedding = torch.randn(patch_dim, embedding_dim) * 0.01
     W_embedding.requires_grad_()
@@ -56,7 +56,7 @@ def positional_encoding(num_patches, embedding_dim):
     return pos_encoding
 
 def add_positional_encoding(embeddings):
-    num_patches, num_patches, embedding_dim = embeddings.shape
+    _, num_patches, embedding_dim = embeddings.shape
     pos_encoding = positional_encoding(num_patches, embedding_dim)
     pos_encoding = pos_encoding.to(embeddings.device)
     embeddings_with_positional_information = embeddings + pos_encoding

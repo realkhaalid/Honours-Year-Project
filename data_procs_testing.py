@@ -9,7 +9,6 @@ def load_audio(file_path):
     audio, sr = lib.load(file_path, sr=None)
     return audio, sr
 
-
 def compute_log_mel_spectrogram(audio_path):
     audio, sr = load_audio(audio_path)
     mel_spec = lib.feature.melspectrogram(y=audio, sr=sr, n_fft=FRAMESIZE, hop_length=HOPLENGTH)
