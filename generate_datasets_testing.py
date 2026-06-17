@@ -54,18 +54,29 @@ def load_and_process_supervised_dataset(dataset_path):
     dataset_path = Path(dataset_path)
     log_mel_specs = []
     labels = []
-
     for audio_file in dataset_path.rglob("*.wav"):
         log_mel_spec = compute_log_mel_spectrogram(audio_file)
         log_mel_specs.append(log_mel_spec)
 
         label = audio_file.parent.name
         labels.append(label)
-
     spectrogram = np.array(log_mel_specs, dtype=np.float32)
-    tensor = torch.from_numpy(spectrogram)
+    spectrogram_tensor = torch.from_numpy(spectrogram)
+    
+    unique_labels = sorted(set(labels))
+    label_map = {
+        class_name: index for index, class_name in enumerate(unique_labels)
+    }
+    encoded_labels = [
+        label_map[label] for label in labels
+    ]
+    labels_tensor = torch.tensor(encoded_labels, dtype=torch.long)
 
-    return tensor, np.array(labels)
+    encoding_map = {
+        index: class_name for class_name, index in label_map.items()
+    }
+
+    return spectrogram_tensor, labels_tensor, encoding_map, label_map
 
 def check_folder_structure(dataset_path):
     folder = Path(dataset_path)

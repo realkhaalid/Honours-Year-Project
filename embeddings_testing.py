@@ -58,7 +58,6 @@ def positional_encoding(num_patches, embedding_dim):
 def add_positional_encoding(embeddings):
     _, num_patches, embedding_dim = embeddings.shape
     pos_encoding = positional_encoding(num_patches, embedding_dim)
-    pos_encoding = pos_encoding.to(embeddings.device)
     embeddings_with_positional_information = embeddings + pos_encoding
     return embeddings_with_positional_information
 
@@ -76,8 +75,8 @@ if __name__ == "__main__":
     supervised_dataset_path = "archive"
 
     unsupervised_log_mel_specs = load_and_process_unsupervised_dataset(unsupervised_dataset_path)
-    supervised_log_mel_specs, supervised_labels = load_and_process_supervised_dataset(supervised_dataset_path)
-    
+    supervised_log_mel_specs, supervised_labels, encoding_map, label_map = load_and_process_supervised_dataset(supervised_dataset_path)
+
     print(f"Unsupervised dataset processed with {len(unsupervised_log_mel_specs)} log-mel spectrograms")
     print(f"Supervised dataset processed with {len(supervised_log_mel_specs)} log-mel spectrograms and {len(supervised_labels)} labels")
     plot_log_mel_spectrogram(unsupervised_log_mel_specs[0])

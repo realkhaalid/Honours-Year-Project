@@ -7,7 +7,7 @@ from embeddings_testing import convert_to_patches, add_positional_encoding, conv
 from encoder_testing import encoder_layer_output
 
 def mask_patches(patches, mask_ratio=0.3):
-    batch_size, num_patches, patch_dim = patches.shape
+    batch_size, num_patches, _ = patches.shape
     mask = torch.rand(batch_size, num_patches) < mask_ratio
     masked_patches = patches.clone()
     masked_patches[mask] = 0.0
@@ -45,6 +45,13 @@ def reconstruction_head(encoder_output, W_reconstruct, b_reconstruct):
     reconstructed_patches = encoder_output @ W_reconstruct + b_reconstruct
     return reconstructed_patches
 
+def hidden_patch_reconstruction_loss(original_patches, reconstructed_patches, mask):
+    mask = mask.unsqueeze(-1)
+    squared_error = (reconstructed_patches - original_patches) ** 2
+    masked_error = squared_error * mask
+    loss = masked_error.sum() / (mask.sum() * original_patches.shape[-1]).clamp(min=1)
+    return loss
+
 if __name__ == "__main__":
     unsupervised_dataset_path = "archive"
     supervised_dataset_path = "archive"
@@ -79,4 +86,5 @@ if __name__ == "__main__":
     print("Sample reconstructed patch values:", reconstructed_patches[0, :5, :5])
     print("Sample original patch values for comparison:", patches[0, :5, :5])
 
-    
+    loss = hidden_patch_reconstruction_loss(patches, reconstructed_patches, mask)
+    print(f"Reconstruction loss: {loss.item()}")
