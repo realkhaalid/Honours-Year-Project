@@ -89,11 +89,11 @@ if __name__ == "__main__":
     unsupervised_dataset_path = "archive"
     supervised_dataset_path = "archive"
     
-    check_folder_structure(unsupervised_dataset_path)
-    check_folder_structure(supervised_dataset_path)
-
     unsupervised_log_mel_specs = load_and_process_unsupervised_dataset(unsupervised_dataset_path)
-    supervised_log_mel_specs, supervised_labels = load_and_process_supervised_dataset(supervised_dataset_path)
-    
+    supervised_log_mel_specs, supervised_labels, encoding_map, label_map = load_and_process_supervised_dataset(supervised_dataset_path)
+
     print(f"Unsupervised dataset processed with {len(unsupervised_log_mel_specs)} log-mel spectrograms")
     print(f"Supervised dataset processed with {len(supervised_log_mel_specs)} log-mel spectrograms and {len(supervised_labels)} labels")
+    print(f"Encoding map: {encoding_map}")
+    print(f"Label map: {label_map}")
+    print(f"Sample supervised label: {supervised_labels[0]} (class name: {encoding_map[supervised_labels[0].item()]})")
