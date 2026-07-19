@@ -98,6 +98,7 @@ def supervised_training(
     train_labels,
     val_specs,
     val_labels,
+    encoding_map,
     epochs=5,
     learning_rate=0.001
 ):
@@ -160,6 +161,23 @@ def supervised_training(
             f"Val Loss: {avg_val_loss:.4f} | "
             f"Val Acc: {val_accuracy:.4f}"
         )
+
+    class_names = [
+        encoding_map[i]
+        for i in range(len(encoding_map))
+    ]
+
+    saved_model = {
+    "model_parameters": model.state_dict(),
+    "class_names": class_names
+    }
+
+    torch.save(
+        saved_model,
+        "audio_transformer_model.pt"
+    )
+
+    print("Model saved successfully.")
 
 def test_model(model, test_specs, test_labels, encoding_map):
     y_true = []
@@ -243,6 +261,7 @@ if __name__ == "__main__":
         train_labels,
         supervised_val_specs,
         val_labels,
+        encoding_map,
         epochs=EPOCHS,
         learning_rate=LEARNING_RATE
     )

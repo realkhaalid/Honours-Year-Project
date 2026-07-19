@@ -126,6 +126,54 @@ class Transformer:
 
                 self.W_classifier, self.b_classifier
             ]
+    
+    def state_dict(self):
+        return {
+        # Patch embedding
+        "W_embedding": self.W_embedding,
+        "b_embedding": self.b_embedding,
+
+        # Multi-head attention
+        "W_query": self.W_query,
+        "b_query": self.b_query,
+        "W_key": self.W_key,
+        "b_key": self.b_key,
+        "W_value": self.W_value,
+        "b_value": self.b_value,
+        "W_output": self.W_output,
+        "b_output": self.b_output,
+
+        # First layer normalisation
+        "gamma1": self.gamma1,
+        "beta1": self.beta1,
+
+        # Feed-forward network
+        "W_ff1": self.W_ff1,
+        "b_ff1": self.b_ff1,
+        "W_ff2": self.W_ff2,
+        "b_ff2": self.b_ff2,
+
+        # Second layer normalisation
+        "gamma2": self.gamma2,
+        "beta2": self.beta2,
+
+        # Reconstruction head
+        "W_reconstruct": self.W_reconstruct,
+        "b_reconstruct": self.b_reconstruct,
+
+        # Classification head
+        "W_classifier": self.W_classifier,
+        "b_classifier": self.b_classifier
+        }
+    
+    def load_state_dict(self, saved_parameters):
+        for parameter_name, saved_value in saved_parameters.items():
+            current_parameter = getattr(
+                self,
+                parameter_name
+            )
+            with torch.no_grad():
+                current_parameter.copy_(saved_value)
         
     def embed_patches(self, patches):
         embeddings = patches @ self.W_embedding + self.b_embedding
@@ -225,6 +273,30 @@ class Transformer:
         predicted_class, probabilities = predict_class(logits)
 
         return loss, logits, predicted_class, probabilities, attention_weights
+    
+    def classify(self, patches):
+        embeddings_with_positional_encoding = self.embed_patches(patches)
+        encoder_output, attention_weights = self.encoder_layer(embeddings_with_positional_encoding)
+
+        pooled_output = average_pooling(encoder_output)
+
+        logits = classification_head(
+            pooled_output,
+            self.W_classifier,
+            self.b_classifier
+        )
+
+        probabilities = torch.softmax(
+        logits,
+        dim=-1
+        )
+
+        predicted_index = torch.argmax(
+            probabilities,
+            dim=-1
+        )
+
+        return predicted_index, probabilities
     
 if __name__ == "__main__":
     unsupervised_dataset_path = "archive"
