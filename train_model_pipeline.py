@@ -30,10 +30,10 @@ from supervised_dataset_class import (
 )
 
 # Train Config
-UNSUPERVISED_EPOCHS = 5
-SUPERVISED_EPOCHS = 5
-UNSUPERVISED_LEARNING_RATE = 1e-3
-SUPERVISED_LEARNING_RATE = 1e-3
+UNSUPERVISED_EPOCHS = 100
+SUPERVISED_EPOCHS = 100
+UNSUPERVISED_LEARNING_RATE = 1e-4
+SUPERVISED_LEARNING_RATE = 1e-4
 BATCH_SIZE = 16
 
 # Model Config
@@ -575,20 +575,6 @@ class TrainModelPipeline:
                     )
                 )
 
-                self.save_model_checkpoint(
-                    model=model,
-                    file_path=model_path,
-                    model_name=model_name,
-                    label_to_index=label_to_index,
-                    index_to_label=index_to_label,
-                    validation_loss=(
-                        best_validation_loss
-                    ),
-                    validation_accuracy=(
-                        best_validation_accuracy
-                    )
-                )
-
                 print(
                     "Saved best supervised "
                     "model parameters."
@@ -597,6 +583,20 @@ class TrainModelPipeline:
         if best_model_state is not None:
             model.load_state_dict(
                 best_model_state
+            )
+
+            self.save_model_checkpoint(
+                model=model,
+                file_path=model_path,
+                model_name=model_name,
+                label_to_index=label_to_index,
+                index_to_label=index_to_label,
+                validation_loss=(
+                    best_validation_loss
+                ),
+                validation_accuracy=(
+                    best_validation_accuracy
+                )
             )
 
         print(

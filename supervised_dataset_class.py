@@ -691,7 +691,8 @@ if __name__ == "__main__":
         training_dataset,
         validation_dataset,
         test_dataset,
-        label_to_index
+        label_to_index,
+        index_to_label
     ) = create_supervised_datasets(
         dataset_path=BABY_SLAKH_DATASET_PATH,
         validation_ratio=VALIDATION_RATIO,
@@ -700,6 +701,10 @@ if __name__ == "__main__":
         set_limit=SET_TRACK_LIMIT,
         maximum_tracks=MAXIMUM_TRACKS
     )
+
+    print(label_to_index)
+    print(index_to_label)
+    print(len(label_to_index))
 
     check_supervised_dataset(
         training_dataset,

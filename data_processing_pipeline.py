@@ -24,11 +24,11 @@ HOPLENGTH = 512
 N_MELS = 128
 F_MIN = 20
 F_MAX = 8000
-LOUDNESS_THRESHOLD_DB = -45.0
+LOUDNESS_THRESHOLD_DB = -55.0
 TARGET_SAMPLE_RATE = 16000
-SOURCE_DURATION_SECONDS = 60
+SOURCE_DURATION_SECONDS = 120
 PATCH_SIZE = 10
-CLIP_DURATION_SECONDS = 2
+CLIP_DURATION_SECONDS = 4
 SUPPORTED_EXTENSIONS = {
     ".wav",
     ".flac"
@@ -36,6 +36,14 @@ SUPPORTED_EXTENSIONS = {
 
 #Supervised Dataset
 BABY_SLAKH_DATASET_PATH = Path("C:/Users/ktyer/Downloads/Supervised-20260729T121921Z-1-001/Supervised/babyslakh_16k/babyslakh_16k")
+EXCLUDED_LABELS = {
+    "Bass",
+    "Strings",
+    "Synth Lead",
+    "Chromatic Percussion",
+    "Reed",
+    "Synth Pad"
+}
 
 #Unsupervised Datasets
 QUARTET_PATH = Path("C:/Users/ktyer/Downloads/Quartet-20260729T123130Z-1-001/Quartet")
@@ -172,6 +180,9 @@ def find_audio_files(
                 )
                 continue
 
+            if instrument_label in EXCLUDED_LABELS:
+                continue
+
             labelled_audio_files.append(
                 (
                     stem_path,
@@ -236,21 +247,18 @@ def load_and_validate_audio(file_path: Path):
     return audio, sample_rate
 
 def cut_audio_to_consistent_length(audio, sr):
-    """
-    Keeps the first 60 seconds of an audio recording.
-    """
+    duration = len(audio) / sr
 
-    required_samples = (
-        sr * SOURCE_DURATION_SECONDS
-    )
-
-    if len(audio) < required_samples:
-        duration = len(audio) / sr
-
+    if duration < SOURCE_DURATION_SECONDS / 2:
         raise ValueError(
             f"Audio is only {duration:.2f} seconds long. "
-            f"At least {SOURCE_DURATION_SECONDS} seconds is required."
+            f"At least {SOURCE_DURATION_SECONDS / 2:.2f} "
+            f"seconds is required."
         )
+
+    required_samples = int(
+        sr * SOURCE_DURATION_SECONDS
+    )
 
     return audio[:required_samples]
 
