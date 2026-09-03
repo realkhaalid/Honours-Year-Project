@@ -26,7 +26,7 @@ from unsupervised_dataset_class import (
     UNSUPERVISED_DATASET_PATHS
 )
 
-from supervised_dataset_class import (
+from construct_dataset_class import (
     create_supervised_datasets,
     BABY_SLAKH_DATASET_PATH
 )
@@ -34,15 +34,24 @@ from supervised_dataset_class import (
 class Transformer:
     def __init__(
         self,
-        patch_dim=1280,
+        sample_batch,
         embedding_dim=128,
         num_heads=4,
         hidden_dim=512,
         num_classes=13,
         mask_ratio=0.3
     ):
-        # Initialize the Transformer model with the given parameters
-        self.patch_dim = patch_dim
+        if sample_batch.ndim != 3:
+            raise ValueError(
+                "Expected sample batch shape "
+                "[batch_size, number_of_patches, patch_dim], "
+                f"but received {sample_batch.shape}."
+            )
+
+        self.patch_dim = (
+            sample_batch.shape[-1]
+        )
+
         self.embedding_dim = embedding_dim
         self.num_heads = num_heads
         self.hidden_dim = hidden_dim
@@ -50,7 +59,7 @@ class Transformer:
         self.mask_ratio = mask_ratio
 
         # Initialize embedding weights and biases
-        self.W_embedding = torch.randn(patch_dim, embedding_dim) * 0.01
+        self.W_embedding = torch.randn(self.patch_dim, embedding_dim) * 0.01
         self.W_embedding.requires_grad_()
         self.b_embedding = torch.zeros(embedding_dim)
         self.b_embedding.requires_grad_()
@@ -99,9 +108,9 @@ class Transformer:
         self.beta2.requires_grad_()
 
         # Initialize reconstruction parameters
-        self.W_reconstruct = torch.randn(embedding_dim, patch_dim) * 0.01
+        self.W_reconstruct = torch.randn(embedding_dim, self.patch_dim) * 0.01
         self.W_reconstruct.requires_grad_()
-        self.b_reconstruct = torch.zeros(patch_dim)
+        self.b_reconstruct = torch.zeros(self.patch_dim)
         self.b_reconstruct.requires_grad_()
 
         # Initialize classification parameters
@@ -272,8 +281,6 @@ class Transformer:
         )
 
         return loss, reconstructed_patches, mask, attention_weights
-
-        
 
     def supervised_fine_tuning(self, patches, labels):
         embeddings_with_positional_encoding = self.embed_patches(patches)

@@ -4,6 +4,8 @@ import torch
 import matplotlib.pyplot as plt
 import warnings
 from pathlib import Path
+import yaml
+from pathlib import Path
 
 #ignore librosa warnings
 warnings.filterwarnings(
@@ -26,43 +28,27 @@ F_MIN = 20
 F_MAX = 8000
 LOUDNESS_THRESHOLD_DB = -55.0
 TARGET_SAMPLE_RATE = 16000
-SOURCE_DURATION_SECONDS = 120
+SOURCE_DURATION_SECONDS = 210
 PATCH_SIZE = 10
-CLIP_DURATION_SECONDS = 4
+CQT_BINS = 84
+BINS_PER_OCTAVE = 12
+CLIP_DURATION_SECONDS = 5
 SUPPORTED_EXTENSIONS = {
     ".wav",
     ".flac"
 }
+EXCLUDED_LABELS = []
 
-#Supervised Dataset
-BABY_SLAKH_DATASET_PATH = Path("C:/Users/ktyer/Downloads/Supervised-20260729T121921Z-1-001/Supervised/babyslakh_16k/babyslakh_16k")
-EXCLUDED_LABELS = {
-    "Bass",
-    "Strings",
-    "Synth Lead",
-    "Chromatic Percussion",
-    "Reed",
-    "Synth Pad"
-}
-
-#Unsupervised Datasets
-QUARTET_PATH = Path("C:/Users/ktyer/Downloads/Quartet-20260729T123130Z-1-001/Quartet")
-PIANO_PATH = Path("C:/Users/ktyer/Downloads/Piano solo 1-20260729T130121Z-1-001/Piano solo 1")
-ACAPELLA_PATH = Path("C:/Users/ktyer/Downloads/Acappella-20260729T145009Z-1-001/Acappella")
-RUMBACHONTA_PATH = Path("C:/Users/ktyer/Downloads/AlejoGranados_RumbaChonta_Full-20260729T150527Z-1-001/AlejoGranados_RumbaChonta_Full")
-DEADROSES_PATH = Path("C:/Users/ktyer/Downloads/AndrewCole_DeadRoses_Full-20260729T150533Z-1-001/AndrewCole_DeadRoses_Full")
-CORINE_PATH = Path("C:/Users/ktyer/Downloads/AbletonesBigBand_CorineCorine_Full-20260729T150514Z-1-001/AbletonesBigBand_CorineCorine_Full")
-SONGOFINDIA_PATH = Path("C:/Users/ktyer/Downloads/AbletonesBigBand_SongOfIndia_Full-20260729T150519Z-1-001/AbletonesBigBand_SongOfIndia_Full")
+#Slakh2100_redux_16k
+SLAKH2100_REDUX_16K_TEST = Path("C:/Uni/YearProject/datasets/slakh2100_redux_16k/test")
+SLAKH2100_REDUX_16K_TRAIN = Path("C:/Uni/YearProject/datasets/slakh2100_redux_16k/train")
+SLAKH2100_REDUX_16K_VALIDATION = Path("C:/Uni/YearProject/datasets/slakh2100_redux_16k/validation")
 
 # Retireve .wav and .flac files from datasets
-import yaml
-from pathlib import Path
-
-
 def find_audio_files(
     dataset_path,
-    set_limit,
-    maximum_files,
+    set_limit=True,
+    maximum_files=20,
     supervised=False
 ):
     """
@@ -75,34 +61,60 @@ def find_audio_files(
         )
 
     if not supervised:
-        audio_files = sorted(
-            file_path
-            for file_path in dataset_path.rglob("*")
-            if (
-                file_path.is_file()
-                and file_path.suffix.lower()
-                in SUPPORTED_EXTENSIONS
-                and not file_path.name.startswith("._")
-                and "__MACOSX" not in file_path.parts
-            )
-        )
+        track_folders = []
+        for folder in dataset_path.iterdir():
 
-        if set_limit:
-            audio_files = audio_files[:maximum_files]
+            if folder.is_dir():
+                track_folders.append(folder)
+
+                if (
+                    set_limit
+                    and len(track_folders) >= maximum_files
+                ):
+                    break
+
+        track_folders = sorted(track_folders)
+
+        audio_files = []
+        for track_folder in track_folders:
+            stems_folder = track_folder / "stems"
+
+            if not stems_folder.exists():
+                print(
+                    f"Stems folder missing: "
+                    f"{track_folder.name}"
+                )
+                continue
+
+            for stem_file in stems_folder.iterdir():
+
+                if (
+                    stem_file.is_file()
+                    and stem_file.suffix.lower()
+                    in SUPPORTED_EXTENSIONS
+                    and not stem_file.name.startswith("._")
+                ):
+                    audio_files.append(stem_file)
+
+        audio_files = sorted(audio_files)        
 
         return audio_files
 
+    track_folders = []
+    for folder in dataset_path.iterdir():
+    
+        if folder.is_dir():
+            track_folders.append(folder)
+    
+            if (
+                set_limit
+                and len(track_folders) >= maximum_files
+            ):
+                break
+    
+    track_folders = sorted(track_folders)
+
     labelled_audio_files = []
-
-    track_folders = sorted(
-        folder
-        for folder in dataset_path.iterdir()
-        if folder.is_dir()
-    )
-
-    if set_limit:
-        track_folders = track_folders[:maximum_files]
-
     for track_folder in track_folders:
         metadata_path = track_folder / "metadata.yaml"
         stems_folder = track_folder / "stems"
@@ -142,18 +154,20 @@ def find_audio_files(
             {}
         )
 
-        actual_stem_files = sorted(
-            stem_file
-            for stem_file in stems_folder.iterdir()
+        audio_files = []
+        for stem_file in stems_folder.iterdir():
+        
             if (
                 stem_file.is_file()
                 and stem_file.suffix.lower()
                 in SUPPORTED_EXTENSIONS
                 and not stem_file.name.startswith("._")
-            )
-        )
+            ):
+                audio_files.append(stem_file)
+        
+        audio_files = sorted(audio_files)
 
-        for stem_path in actual_stem_files:
+        for stem_path in audio_files:
             stem_id = stem_path.stem
 
             stem_information = stems_metadata.get(
@@ -300,6 +314,57 @@ def convert_to_mel_spectrogram(audio, sr):
 
     return log_mel_spectrogram_tensor
 
+def convert_to_stft_spectrogram(audio, sr):
+    """
+    Converts an audio sub-sample into a log-STFT spectrogram.
+    """
+
+    stft = lib.stft(
+        y=audio,
+        n_fft=FRAMESIZE,
+        hop_length=HOPLENGTH
+    )
+
+    stft_magnitude = np.abs(stft)
+
+    log_stft_spectrogram = lib.amplitude_to_db(
+        stft_magnitude,
+        ref=np.max
+    ).astype(np.float32)
+
+    log_stft_spectrogram_tensor = torch.from_numpy(
+        log_stft_spectrogram
+    )
+
+    return log_stft_spectrogram_tensor
+
+def convert_to_cqt_spectrogram(audio, sr):
+    """
+    Converts an audio sub-sample into a log-CQT spectrogram.
+    """
+
+    cqt = lib.cqt(
+        y=audio,
+        sr=sr,
+        hop_length=HOPLENGTH,
+        fmin=F_MIN,
+        n_bins=CQT_BINS,
+        bins_per_octave=BINS_PER_OCTAVE
+    )
+
+    cqt_magnitude = np.abs(cqt)
+
+    log_cqt_spectrogram = lib.amplitude_to_db(
+        cqt_magnitude,
+        ref=np.max
+    ).astype(np.float32)
+
+    log_cqt_spectrogram_tensor = torch.from_numpy(
+        log_cqt_spectrogram
+    )
+
+    return log_cqt_spectrogram_tensor
+
 def convert_to_patches(spectrogram, patch_size=PATCH_SIZE):
     """
     Converts a log-mel spectrogram into patches.
@@ -328,14 +393,16 @@ def split_audio_into_subsamples(
         audio,
         sr,
         clip_duration=CLIP_DURATION_SECONDS,
-        loudness_threshold=LOUDNESS_THRESHOLD_DB):
+        loudness_threshold=LOUDNESS_THRESHOLD_DB,
+        data_representation=convert_to_mel_spectrogram
+    ):
     """
     Splits audio into complete two-second sub-samples.
 
     Each sub-sample is:
     1. checked for loudness,
     2. discarded if too quiet,
-    3. converted to a log-mel spectrogram,
+    3. converted to a spectrogram,
     4. converted into patches.
     """
     sub_sample_length = int(
@@ -379,7 +446,7 @@ def split_audio_into_subsamples(
             quiet_sub_samples += 1
             continue
 
-        spectrogram = convert_to_mel_spectrogram(
+        spectrogram = data_representation(
             sub_sample,
             sr
         )
@@ -401,17 +468,13 @@ def split_audio_into_subsamples(
     return valid_patches, statistics
 
 if __name__ == "__main__":
-    audio_files = find_audio_files(CORINE_PATH, False, 30)
-    labelled_audio_files = find_audio_files(
-        dataset_path=BABY_SLAKH_DATASET_PATH,
-        set_limit=False,
-        maximum_files=20,
-        supervised=True
-    )
-    print(f"Total files: {len(audio_files)}")
+    supervised_audio_files = find_audio_files(SLAKH2100_REDUX_16K_TRAIN, supervised=True)
+    unsupervised_audio_files = find_audio_files(SLAKH2100_REDUX_16K_TRAIN)
+    print(f"Total Supervised files: {len(supervised_audio_files)}")
+    print(f"Total Unsupervised files: {len(unsupervised_audio_files)}")
     invalid_count = 0
     check_count = 0
-    for audio_file in audio_files:
+    for audio_file in unsupervised_audio_files:
         try:
             audio, sr = load_and_validate_audio(audio_file)
             audio_cut = cut_audio_to_consistent_length(audio, sr)
@@ -435,7 +498,7 @@ if __name__ == "__main__":
 
     s_invalid_count = 0
     s_check_count = 0
-    for audio_file, label in labelled_audio_files:
+    for audio_file, label in supervised_audio_files:
         try:
             audio, sr = load_and_validate_audio(audio_file)
             audio_cut = cut_audio_to_consistent_length(audio, sr)
@@ -459,6 +522,6 @@ if __name__ == "__main__":
             continue
 
     print(f"Invalid file count: {invalid_count}")
-    print(f"Total viable audio files: {len(audio_files) - invalid_count}")
+    print(f"Total viable audio files: {len(unsupervised_audio_files) - invalid_count}")
     print(f"Invalid labelled file count: {s_invalid_count}")
-    print(f"Total viable labelled audio files: {len(labelled_audio_files) - s_invalid_count}")
+    print(f"Total viable labelled audio files: {len(supervised_audio_files) - s_invalid_count}")

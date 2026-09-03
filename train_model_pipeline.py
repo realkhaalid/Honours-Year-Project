@@ -24,7 +24,7 @@ from unsupervised_dataset_class import (
     create_unsupervised_datasets,
     UNSUPERVISED_DATASET_PATHS
 )
-from supervised_dataset_class import (
+from construct_dataset_class import (
     create_supervised_datasets,
     BABY_SLAKH_DATASET_PATH
 )
