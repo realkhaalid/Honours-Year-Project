@@ -16,12 +16,33 @@ def predict_class(logits):
 
     return predicted_class, probabilities
 
-def cross_entropy_loss(logits, labels):
-    probabilities = torch.softmax(logits, dim=-1)
+def cross_entropy_loss(
+    logits,
+    labels
+):
+    """
+    Calculates numerically stable cross-entropy
+    loss directly from logits.
+    """
+
     batch_size = logits.shape[0]
-    correct_class_probabilities = probabilities[
-        torch.arange(batch_size),
+
+    correct_class_logits = logits[
+        torch.arange(
+            batch_size,
+            device=logits.device
+        ),
         labels
     ]
-    loss = -torch.log(correct_class_probabilities + 1e-9).mean()
+
+    log_sum_exp = torch.logsumexp(
+        logits,
+        dim=-1
+    )
+
+    loss = (
+        log_sum_exp
+        - correct_class_logits
+    ).mean()
+
     return loss

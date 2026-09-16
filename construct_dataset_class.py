@@ -1,9 +1,12 @@
-import random
 import warnings
 from pathlib import Path
+from tqdm import tqdm
 
 import torch
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import (
+    Dataset,
+    DataLoader
+)
 
 from sklearn.model_selection import (
     StratifiedGroupKFold
@@ -13,11 +16,14 @@ from data_processing_pipeline import (
     find_audio_files,
     load_and_validate_audio,
     cut_audio_to_consistent_length,
-    split_audio_into_subsamples,
+    find_valid_subsamples,
+    load_audio_subsample,
+    process_audio_subsample,
     convert_to_mel_spectrogram,
     convert_to_stft_spectrogram,
     convert_to_cqt_spectrogram
 )
+
 
 # Ignore selected Librosa warnings
 warnings.filterwarnings(
@@ -32,29 +38,51 @@ warnings.filterwarnings(
     category=FutureWarning
 )
 
+
 # Config
 BATCH_SIZE = 16
 SHUFFLE_TRAINING_DATA = True
-SET_TRACK_LIMIT = True
+
+SET_TRACK_LIMIT = False
 MAXIMUM_TRACKS = 20
 
-#Slakh2100_redux_16k
-SLAKH2100_REDUX_16K_TEST = Path("C:/Uni/YearProject/datasets/slakh2100_redux_16k/test")
-SLAKH2100_REDUX_16K_TRAIN = Path("C:/Uni/YearProject/datasets/slakh2100_redux_16k/train")
-SLAKH2100_REDUX_16K_VALIDATION = Path("C:/Uni/YearProject/datasets/slakh2100_redux_16k/validation")
+
+# Slakh2100 Redux 16k
+SLAKH2100_REDUX_16K_TEST = Path(
+    "C:/Uni/YearProject/datasets/"
+    "slakh2100_redux_16k/test"
+)
+
+SLAKH2100_REDUX_16K_TRAIN = Path(
+    "C:/Uni/YearProject/datasets/"
+    "slakh2100_redux_16k/train"
+)
+
+SLAKH2100_REDUX_16K_VALIDATION = Path(
+    "C:/Uni/YearProject/datasets/"
+    "slakh2100_redux_16k/validation"
+)
+
 
 # Supervised dataset class
-class SupervisedAudioDataset(Dataset):
+class SupervisedAudioDataset(
+    Dataset
+):
     """
-    Processes labelled Slakh audio stems and stores
-    valid audio representations with integer labels.
+    Stores metadata for valid labelled audio
+    sub-samples.
+
+    Spectrograms and patch tensors are generated
+    lazily when __getitem__ is called.
     """
 
     def __init__(
         self,
         labelled_audio_files,
         label_to_index,
-        data_representation=convert_to_mel_spectrogram
+        data_representation=(
+            convert_to_mel_spectrogram
+        )
     ):
         self.samples = []
         self.labels = []
@@ -83,6 +111,7 @@ class SupervisedAudioDataset(Dataset):
             labelled_audio_files
         )
 
+
     def _create_processing_stats(
         self,
         labelled_audio_files
@@ -93,33 +122,42 @@ class SupervisedAudioDataset(Dataset):
 
         label_source_counts = {
             label: 0
-            for label in self.label_to_index
+            for label
+            in self.label_to_index
         }
 
         label_valid_sample_counts = {
             label: 0
-            for label in self.label_to_index
+            for label
+            in self.label_to_index
         }
 
         label_quiet_sample_counts = {
             label: 0
-            for label in self.label_to_index
+            for label
+            in self.label_to_index
         }
 
         return {
-            "source_files": len(
-                labelled_audio_files
-            ),
+            "source_files":
+                len(
+                    labelled_audio_files
+                ),
 
-            "valid_source_files": 0,
+            "valid_source_files":
+                0,
 
-            "invalid_source_files": 0,
+            "invalid_source_files":
+                0,
 
-            "total_sub_samples": 0,
+            "total_sub_samples":
+                0,
 
-            "valid_sub_samples": 0,
+            "valid_sub_samples":
+                0,
 
-            "quiet_sub_samples": 0,
+            "quiet_sub_samples":
+                0,
 
             "source_label_balance":
                 label_source_counts,
@@ -130,21 +168,25 @@ class SupervisedAudioDataset(Dataset):
             "quiet_sample_balance":
                 label_quiet_sample_counts,
 
-            "invalid_files": []
+            "invalid_files":
+                []
         }
+
 
     def _update_source_label_count(
         self,
         instrument_label
     ):
         """
-        Updates the number of source stems for a label.
+        Updates the number of source stems
+        for a label.
         """
 
         if (
             instrument_label
             not in self.label_to_index
         ):
+
             raise KeyError(
                 f"Unknown instrument label: "
                 f"{instrument_label}"
@@ -154,24 +196,32 @@ class SupervisedAudioDataset(Dataset):
             "source_label_balance"
         ][instrument_label] += 1
 
+
     def _process_audio_files(
         self,
         labelled_audio_files
     ):
         """
-        Processes every labelled audio stem.
+        Scans every labelled source stem and
+        stores metadata for valid sub-samples.
+
+        No spectrogram or patch tensors are
+        permanently stored here.
         """
 
         for (
             audio_file,
             instrument_label
-        ) in labelled_audio_files:
+        ) in tqdm(
+            labelled_audio_files
+        ):
 
             self._update_source_label_count(
                 instrument_label
             )
 
             try:
+
                 audio, sample_rate = (
                     load_and_validate_audio(
                         audio_file
@@ -186,19 +236,24 @@ class SupervisedAudioDataset(Dataset):
                 )
 
                 (
-                    valid_patches,
+                    valid_start_samples,
                     statistics
-                ) = split_audio_into_subsamples(
-                    audio_cut,
-                    sample_rate,
-                    data_representation=(
-                        self.data_representation
+                ) = (
+                    find_valid_subsamples(
+                        audio_cut,
+                        sample_rate
                     )
                 )
 
                 self._store_valid_samples(
-                    valid_patches,
-                    instrument_label
+                    audio_file=audio_file,
+                    sample_rate=sample_rate,
+                    valid_start_samples=(
+                        valid_start_samples
+                    ),
+                    instrument_label=(
+                        instrument_label
+                    )
                 )
 
                 self._update_processing_stats(
@@ -225,70 +280,77 @@ class SupervisedAudioDataset(Dataset):
                     "invalid_files"
                 ].append(
                     {
-                        "file": str(audio_file),
-                        "label": instrument_label,
-                        "reason": str(error)
+                        "file":
+                            str(
+                                audio_file
+                            ),
+
+                        "label":
+                            instrument_label,
+
+                        "reason":
+                            str(
+                                error
+                            )
                     }
-                )            
+                )
+
 
     def _store_valid_samples(
         self,
-        valid_patches,
+        audio_file,
+        sample_rate,
+        valid_start_samples,
         instrument_label
     ):
         """
-        Stores valid processed samples and labels.
+        Stores lightweight metadata for each
+        valid audio sub-sample.
         """
 
         if (
             instrument_label
             not in self.label_to_index
         ):
+
             raise KeyError(
                 f"Unknown instrument label: "
                 f"{instrument_label}"
             )
 
-        label_index = self.label_to_index[
-            instrument_label
-        ]
+        label_index = (
+            self.label_to_index[
+                instrument_label
+            ]
+        )
 
-        for patch_tensor in valid_patches:
-
-            if not isinstance(
-                patch_tensor,
-                torch.Tensor
-            ):
-                raise TypeError(
-                    "Each processed sample must "
-                    "be a PyTorch tensor."
-                )
-
-            if patch_tensor.ndim != 3:
-                raise ValueError(
-                    "Expected patch tensor shape "
-                    "[1, number_of_patches, "
-                    "patch_features], but received "
-                    f"{patch_tensor.shape}."
-                )
-
-            if patch_tensor.shape[0] != 1:
-                raise ValueError(
-                    "The first patch tensor "
-                    "dimension must be 1."
-                )
-
-            sample = patch_tensor.squeeze(0)
+        for start_sample in (
+            valid_start_samples
+        ):
 
             self.samples.append(
-                sample.to(
-                    dtype=torch.float32
-                )
+                {
+                    "audio_file":
+                        Path(
+                            audio_file
+                        ),
+
+                    "start_sample":
+                        int(
+                            start_sample
+                        ),
+
+                    "sample_rate":
+                        int(
+                            sample_rate
+                        )
+                }
             )
 
             self.labels.append(
                 label_index
             )
+
 
     def _update_processing_stats(
         self,
@@ -296,7 +358,8 @@ class SupervisedAudioDataset(Dataset):
         instrument_label
     ):
         """
-        Updates overall and label-specific statistics.
+        Updates overall and label-specific
+        statistics.
         """
 
         total_samples = (
@@ -331,53 +394,151 @@ class SupervisedAudioDataset(Dataset):
 
         self.processing_stats[
             "sample_label_balance"
-        ][instrument_label] += valid_samples
+        ][instrument_label] += (
+            valid_samples
+        )
 
         self.processing_stats[
             "quiet_sample_balance"
-        ][instrument_label] += quiet_samples
+        ][instrument_label] += (
+            quiet_samples
+        )
 
-    def return_label_mappings(self):
-            """
-            Returns the label-to-index and index-to-label
-            mappings.
-            """
-    
-            return (
-                dict(self.label_to_index),
-                dict(self.index_to_label)
+
+    def return_label_mappings(
+        self
+    ):
+        """
+        Returns the label-to-index and
+        index-to-label mappings.
+        """
+
+        return (
+            dict(
+                self.label_to_index
+            ),
+            dict(
+                self.index_to_label
             )
+        )
 
-    def return_processing_stats(self):
+
+    def return_processing_stats(
+        self
+    ):
         """
         Returns dataset processing statistics.
         """
 
-        return self.processing_stats
+        return (
+            self.processing_stats
+        )
 
-    def __len__(self):
+
+    def __len__(
+        self
+    ):
         """
-        Returns the number of valid labelled samples.
+        Returns the number of valid indexed
+        audio sub-samples.
         """
 
-        return len(self.samples)
+        return len(
+            self.samples
+        )
+
 
     def __getitem__(
         self,
         index
     ):
         """
-        Returns one processed sample and its integer label.
+        Lazily loads and processes one valid
+        audio sub-sample.
         """
 
-        sample = self.samples[index]
+        sample_information = (
+            self.samples[
+                index
+            ]
+        )
+
+        (
+            audio,
+            sample_rate
+        ) = (
+            load_audio_subsample(
+                file_path=(
+                    sample_information[
+                        "audio_file"
+                    ]
+                ),
+                start_sample=(
+                    sample_information[
+                        "start_sample"
+                    ]
+                ),
+                sample_rate=(
+                    sample_information[
+                        "sample_rate"
+                    ]
+                )
+            )
+        )
+
+        patches = (
+            process_audio_subsample(
+                audio,
+                sample_rate,
+                data_representation=(
+                    self.data_representation
+                )
+            )
+        )
+
+        if not isinstance(
+            patches,
+            torch.Tensor
+        ):
+
+            raise TypeError(
+                "Processed sample must be "
+                "a PyTorch tensor."
+            )
+
+        if patches.ndim != 3:
+
+            raise ValueError(
+                "Expected patch tensor shape "
+                "[1, number_of_patches, "
+                "patch_features], but received "
+                f"{patches.shape}."
+            )
+
+        if patches.shape[0] != 1:
+
+            raise ValueError(
+                "The first patch tensor "
+                "dimension must be 1."
+            )
+
+        sample = (
+            patches
+            .squeeze(0)
+            .to(
+                dtype=torch.float32
+            )
+        )
 
         label = torch.tensor(
             self.labels[index],
             dtype=torch.long
         )
 
-        return sample, label
+        return (
+            sample,
+            label
+        )
 
 
 # Collect labelled files
@@ -390,14 +551,23 @@ def collect_supervised_audio_files(
     Retrieves labelled stems.
     """
 
-    labelled_audio_files = find_audio_files(
-        dataset_path=dataset_path,
-        set_limit=set_limit,
-        maximum_files=maximum_tracks,
-        supervised=True
+    labelled_audio_files = (
+        find_audio_files(
+            dataset_path=(
+                dataset_path
+            ),
+            set_limit=set_limit,
+            maximum_files=(
+                maximum_tracks
+            ),
+            supervised=True
+        )
     )
 
-    return labelled_audio_files
+    return (
+        labelled_audio_files
+    )
+
 
 # Create label mapping
 def create_label_mapping(
@@ -409,30 +579,38 @@ def create_label_mapping(
 
     unique_labels = sorted({
         label
-        for _, label in labelled_audio_files
+        for _, label
+        in labelled_audio_files
     })
 
     if not unique_labels:
+
         raise ValueError(
-            "No instrument labels were found."
+            "No instrument labels "
+            "were found."
         )
 
     label_to_index = {
         label: index
-        for index, label in enumerate(
+        for index, label
+        in enumerate(
             unique_labels
         )
     }
 
-    return label_to_index
+    return (
+        label_to_index
+    )
 
-#Split labelled files
+
+# Split labelled files
 def split_training_files(
     labelled_audio_files,
     random_seed=42
 ):
     """
-    Splits labelled training files into unsupervised and supervised groups
+    Splits labelled training files into
+    unsupervised and supervised groups.
     """
 
     labels = [
@@ -447,10 +625,14 @@ def split_training_files(
         in labelled_audio_files
     ]
 
-    splitter = StratifiedGroupKFold(
-        n_splits=2,
-        shuffle=True,
-        random_state=random_seed
+    splitter = (
+        StratifiedGroupKFold(
+            n_splits=2,
+            shuffle=True,
+            random_state=(
+                random_seed
+            )
+        )
     )
 
     (
@@ -460,18 +642,26 @@ def split_training_files(
         splitter.split(
             labelled_audio_files,
             labels,
-            groups=track_groups
+            groups=(
+                track_groups
+            )
         )
     )
 
     unsupervised_files = [
-        labelled_audio_files[index]
-        for index in unsupervised_indices
+        labelled_audio_files[
+            index
+        ]
+        for index
+        in unsupervised_indices
     ]
 
     supervised_files = [
-        labelled_audio_files[index]
-        for index in supervised_indices
+        labelled_audio_files[
+            index
+        ]
+        for index
+        in supervised_indices
     ]
 
     return (
@@ -479,7 +669,8 @@ def split_training_files(
         supervised_files
     )
 
-# Create supervised datasets
+
+# Create datasets
 def create_datasets(
     training_path,
     validation_path,
@@ -491,15 +682,18 @@ def create_datasets(
     maximum_tracks=MAXIMUM_TRACKS
 ):
     """
-    Creates supervised datasets using the official
-    Slakh train, validation, and test partitions.
+    Creates datasets using the official
+    Slakh train, validation, and test
+    partitions.
     """
 
     training_files = (
         collect_supervised_audio_files(
             training_path,
             set_limit=set_limit,
-            maximum_tracks=maximum_tracks
+            maximum_tracks=(
+                maximum_tracks
+            )
         )
     )
 
@@ -514,7 +708,9 @@ def create_datasets(
         collect_supervised_audio_files(
             validation_path,
             set_limit=set_limit,
-            maximum_tracks=maximum_tracks
+            maximum_tracks=(
+                maximum_tracks
+            )
         )
     )
 
@@ -529,20 +725,28 @@ def create_datasets(
         collect_supervised_audio_files(
             test_path,
             set_limit=set_limit,
-            maximum_tracks=maximum_tracks
+            maximum_tracks=(
+                maximum_tracks
+            )
         )
     )
 
-    label_to_index = create_label_mapping(
-        training_files
+    label_to_index = (
+        create_label_mapping(
+            training_files
+        )
     )
 
-    label_to_index_val = create_label_mapping(
-        validation_files
+    label_to_index_val = (
+        create_label_mapping(
+            validation_files
+        )
     )
 
-    label_to_index_test =create_label_mapping(
-        test_files
+    label_to_index_test = (
+        create_label_mapping(
+            test_files
+        )
     )
 
     supervised_training_dataset = (
@@ -576,14 +780,14 @@ def create_datasets(
     )
 
     unsupervised_validation_dataset = (
-            SupervisedAudioDataset(
-                unsupervised_validation_files,
-                label_to_index,
-                data_representation=(
-                    data_representation
-                )
+        SupervisedAudioDataset(
+            unsupervised_validation_files,
+            label_to_index,
+            data_representation=(
+                data_representation
             )
         )
+    )
 
     test_dataset = (
         SupervisedAudioDataset(
@@ -605,19 +809,26 @@ def create_datasets(
         label_to_index_test
     )
 
+
 # Check dataset information
 def check_supervised_dataset(
     dataset,
     dataset_name
 ):
     """
-    Prints information about a supervised dataset.
+    Prints information about a dataset.
     """
 
-    print(f"\n{dataset_name}")
+    print(
+        f"\n{dataset_name}"
+    )
+
     print("=" * 60)
 
-    stats = dataset.return_processing_stats()
+    stats = (
+        dataset
+        .return_processing_stats()
+    )
 
     print(
         f"Number of samples: "
@@ -662,50 +873,72 @@ def check_supervised_dataset(
     print(
         "\nSource-file label balance"
     )
+
     print("-" * 60)
 
     for label, count in (
-        stats["source_label_balance"].items()
+        stats[
+            "source_label_balance"
+        ].items()
     ):
+
         print(
-            f"{label}: {count}"
+            f"{label}: "
+            f"{count}"
         )
 
     print(
         "\nValid-sample label balance"
     )
+
     print("-" * 60)
 
     for label, count in (
-        stats["sample_label_balance"].items()
+        stats[
+            "sample_label_balance"
+        ].items()
     ):
+
         print(
-            f"{label}: {count}"
+            f"{label}: "
+            f"{count}"
         )
 
     print(
         "\nQuiet-sample label balance"
     )
+
     print("-" * 60)
 
     for label, count in (
-        stats["quiet_sample_balance"].items()
+        stats[
+            "quiet_sample_balance"
+        ].items()
     ):
+
         print(
-            f"{label}: {count}"
+            f"{label}: "
+            f"{count}"
         )
 
     if len(dataset) == 0:
+
         print(
-            "\nThe dataset contains no valid samples."
+            "\nThe dataset contains "
+            "no valid samples."
         )
+
         return
 
-    first_sample, first_label = dataset[0]
+    (
+        first_sample,
+        first_label
+    ) = dataset[0]
 
     print(
         "\nFirst sample"
     )
+
     print("-" * 60)
 
     print(
@@ -748,6 +981,7 @@ def check_supervised_dataset(
         f"{first_sample.shape[1]}"
     )
 
+
 # Check one DataLoader batch
 def check_data_loader(
     data_loader,
@@ -757,17 +991,33 @@ def check_data_loader(
     Prints the shape and dtype of one batch.
     """
 
-    if len(data_loader.dataset) == 0:
-        print(
-            f"\n{loader_name} contains no samples."
+    if (
+        len(
+            data_loader.dataset
         )
+        == 0
+    ):
+
+        print(
+            f"\n{loader_name} "
+            f"contains no samples."
+        )
+
         return
 
-    sample_batch, label_batch = next(
-        iter(data_loader)
+    (
+        sample_batch,
+        label_batch
+    ) = next(
+        iter(
+            data_loader
+        )
     )
 
-    print(f"\n{loader_name}")
+    print(
+        f"\n{loader_name}"
+    )
+
     print("=" * 50)
 
     print(
@@ -795,7 +1045,8 @@ def check_data_loader(
         f"{label_batch}"
     )
 
-#Testing
+
+# Testing
 if __name__ == "__main__":
 
     # Create datasets
@@ -808,14 +1059,24 @@ if __name__ == "__main__":
         label_to_index_val,
         label_to_index_test
     ) = create_datasets(
-        training_path=SLAKH2100_REDUX_16K_TRAIN,
-        validation_path=SLAKH2100_REDUX_16K_VALIDATION,
-        test_path=SLAKH2100_REDUX_16K_TEST,
+        training_path=(
+            SLAKH2100_REDUX_16K_TRAIN
+        ),
+        validation_path=(
+            SLAKH2100_REDUX_16K_VALIDATION
+        ),
+        test_path=(
+            SLAKH2100_REDUX_16K_TEST
+        ),
         data_representation=(
             convert_to_cqt_spectrogram
         ),
-        set_limit=SET_TRACK_LIMIT,
-        maximum_tracks=MAXIMUM_TRACKS
+        set_limit=(
+            SET_TRACK_LIMIT
+        ),
+        maximum_tracks=(
+            MAXIMUM_TRACKS
+        )
     )
 
     # Retrieve model label mappings
@@ -831,6 +1092,7 @@ if __name__ == "__main__":
     print(
         "\nLabel Mapping Comparison"
     )
+
     print("=" * 80)
 
     print(
@@ -840,8 +1102,10 @@ if __name__ == "__main__":
     for label, index in (
         model_label_to_index.items()
     ):
+
         print(
-            f"{index}: {label}"
+            f"{index}: "
+            f"{label}"
         )
 
     print(
@@ -895,6 +1159,7 @@ if __name__ == "__main__":
     print(
         "\nDataset Statistics Comparison"
     )
+
     print("=" * 105)
 
     print(
@@ -917,14 +1182,18 @@ if __name__ == "__main__":
         "quiet_sub_samples"
     ]
 
-    for statistic in statistic_keys:
+    for statistic in (
+        statistic_keys
+    ):
 
         print(
             f"{statistic:<25}",
             end=""
         )
 
-        for dataset in datasets.values():
+        for dataset in (
+            datasets.values()
+        ):
 
             stats = (
                 dataset
@@ -943,7 +1212,9 @@ if __name__ == "__main__":
         end=""
     )
 
-    for dataset in datasets.values():
+    for dataset in (
+        datasets.values()
+    ):
 
         print(
             f"{len(dataset):>16}",
@@ -956,6 +1227,7 @@ if __name__ == "__main__":
     print(
         "\nSource File Label Balance"
     )
+
     print("=" * 105)
 
     print(
@@ -969,14 +1241,18 @@ if __name__ == "__main__":
 
     print("-" * 105)
 
-    for label in model_label_to_index:
+    for label in (
+        model_label_to_index
+    ):
 
         print(
             f"{label:<25}",
             end=""
         )
 
-        for dataset in datasets.values():
+        for dataset in (
+            datasets.values()
+        ):
 
             stats = (
                 dataset
@@ -1003,6 +1279,7 @@ if __name__ == "__main__":
     print(
         "\nValid Sample Label Balance"
     )
+
     print("=" * 105)
 
     print(
@@ -1016,14 +1293,18 @@ if __name__ == "__main__":
 
     print("-" * 105)
 
-    for label in model_label_to_index:
+    for label in (
+        model_label_to_index
+    ):
 
         print(
             f"{label:<25}",
             end=""
         )
 
-        for dataset in datasets.values():
+        for dataset in (
+            datasets.values()
+        ):
 
             stats = (
                 dataset
@@ -1050,6 +1331,7 @@ if __name__ == "__main__":
     print(
         "\nQuiet Samples Removed Per Label"
     )
+
     print("=" * 105)
 
     print(
@@ -1063,14 +1345,18 @@ if __name__ == "__main__":
 
     print("-" * 105)
 
-    for label in model_label_to_index:
+    for label in (
+        model_label_to_index
+    ):
 
         print(
             f"{label:<25}",
             end=""
         )
 
-        for dataset in datasets.values():
+        for dataset in (
+            datasets.values()
+        ):
 
             stats = (
                 dataset
@@ -1092,7 +1378,6 @@ if __name__ == "__main__":
             )
 
         print()
-
 
     # Check individual datasets
     check_supervised_dataset(
@@ -1121,34 +1406,48 @@ if __name__ == "__main__":
     )
 
     # Create DataLoaders
-    supervised_training_loader = DataLoader(
-        supervised_training_dataset,
-        batch_size=BATCH_SIZE,
-        shuffle=SHUFFLE_TRAINING_DATA
+    supervised_training_loader = (
+        DataLoader(
+            supervised_training_dataset,
+            batch_size=BATCH_SIZE,
+            shuffle=(
+                SHUFFLE_TRAINING_DATA
+            )
+        )
     )
 
-    supervised_validation_loader = DataLoader(
-        supervised_validation_dataset,
-        batch_size=BATCH_SIZE,
-        shuffle=False
+    supervised_validation_loader = (
+        DataLoader(
+            supervised_validation_dataset,
+            batch_size=BATCH_SIZE,
+            shuffle=False
+        )
     )
 
-    unsupervised_training_loader = DataLoader(
-        unsupervised_training_dataset,
-        batch_size=BATCH_SIZE,
-        shuffle=SHUFFLE_TRAINING_DATA
+    unsupervised_training_loader = (
+        DataLoader(
+            unsupervised_training_dataset,
+            batch_size=BATCH_SIZE,
+            shuffle=(
+                SHUFFLE_TRAINING_DATA
+            )
+        )
     )
 
-    unsupervised_validation_loader = DataLoader(
-        unsupervised_validation_dataset,
-        batch_size=BATCH_SIZE,
-        shuffle=False
+    unsupervised_validation_loader = (
+        DataLoader(
+            unsupervised_validation_dataset,
+            batch_size=BATCH_SIZE,
+            shuffle=False
+        )
     )
 
-    test_loader = DataLoader(
-        test_dataset,
-        batch_size=BATCH_SIZE,
-        shuffle=False
+    test_loader = (
+        DataLoader(
+            test_dataset,
+            batch_size=BATCH_SIZE,
+            shuffle=False
+        )
     )
 
     # Check one batch from each DataLoader

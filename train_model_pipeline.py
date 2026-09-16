@@ -1,86 +1,61 @@
 import torch
+import copy
+from tqdm import tqdm
 from torch.utils.data import DataLoader
-from sklearn.metrics import (
-    accuracy_score,
-    classification_report,
-    confusion_matrix,
-    precision_recall_fscore_support
-)
 from pathlib import Path
 from datetime import datetime
-from reportlab.lib import colors
-from reportlab.lib.pagesizes import A4, landscape
-from reportlab.lib.styles import getSampleStyleSheet
-from reportlab.platypus import (
-    SimpleDocTemplate,
-    Paragraph,
-    Spacer,
-    Table,
-    TableStyle,
-    PageBreak
-)
 from transformer_model_class import Transformer
-from unsupervised_dataset_class import (
-    create_unsupervised_datasets,
-    UNSUPERVISED_DATASET_PATHS
+from data_processing_pipeline import (
+    convert_to_mel_spectrogram,
+    convert_to_cqt_spectrogram,
+    convert_to_stft_spectrogram
 )
 from construct_dataset_class import (
-    create_supervised_datasets,
-    BABY_SLAKH_DATASET_PATH
+    create_datasets,
+    SLAKH2100_REDUX_16K_TRAIN,
+    SLAKH2100_REDUX_16K_VALIDATION,
+    SLAKH2100_REDUX_16K_TEST
 )
 
 # Train Config
-UNSUPERVISED_EPOCHS = 100
-SUPERVISED_EPOCHS = 100
-UNSUPERVISED_LEARNING_RATE = 1e-4
-SUPERVISED_LEARNING_RATE = 1e-4
 BATCH_SIZE = 16
 
-# Model Config
-PATCH_DIM = 1280
 EMBEDDING_DIM = 128
 NUM_HEADS = 4
-HIDDEN_DIM = 512
-MASK_RATIO = 0.30
+HIDDEN_DIMS = (256,512,256)
+NUM_ENCODER_LAYERS = 2
 
-# Output folders
-MODEL_OUTPUT_DIRECTORY = Path("saved_models")
-RESULT_OUTPUT_DIRECTORY = Path("test_results")
+MASK_RATIO = 0.3
+ACTIVATION = "relu"
 
-MODEL_OUTPUT_DIRECTORY.mkdir(
-    parents=True,
-    exist_ok=True
+UNSUPERVISED_EPOCHS = 30
+SUPERVISED_EPOCHS = 50
+
+UNSUPERVISED_LEARNING_RATE = 1e-4
+SUPERVISED_LEARNING_RATE = 1e-5
+
+CHECKPOINT_INTERVAL = 10
+CHECKPOINT_DIRECTORY = "checkpoints"
+
+SET_LIMIT = False
+MAXIMUM_TRACKS = 500
+
+DATA_REPRESENTATION = (
+    convert_to_mel_spectrogram
 )
 
-RESULT_OUTPUT_DIRECTORY.mkdir(
-    parents=True,
-    exist_ok=True
+PRETRAINED_MODEL_NAME = (
+    "mel_pretrained_fine_tuned_test"
 )
 
-PRETRAINED_MODEL_PATH = (
-    MODEL_OUTPUT_DIRECTORY
-    / "best_pretrained_fine_tuned_model.pt"
-)
-
-SUPERVISED_ONLY_MODEL_PATH = (
-    MODEL_OUTPUT_DIRECTORY
-    / "best_supervised_only_model.pt"
-)
-
-PRETRAINED_RESULTS_PDF_PATH = (
-    RESULT_OUTPUT_DIRECTORY
-    / "pretrained_fine_tuned_test_results.pdf"
-)
-
-SUPERVISED_ONLY_RESULTS_PDF_PATH = (
-    RESULT_OUTPUT_DIRECTORY
-    / "supervised_only_test_results.pdf"
+SUPERVISED_ONLY_MODEL_NAME = (
+    "mel_supervised_only_test"
 )
 
 # Training and evaluation pipeline
 class TrainModelPipeline:
     """
-    Trains and evaluates the custom Transformer model.
+    Trains the custom Transformer model.
 
     Supported training approaches:
 
@@ -92,118 +67,511 @@ class TrainModelPipeline:
     """
     def __init__(
         self,
-        patch_dim,
-        embedding_dim,
-        num_heads,
-        hidden_dim,
-        num_classes,
-        mask_ratio=0.30
+        embedding_dim=128,
+        num_heads=4,
+        hidden_dims=(512,),
+        num_encoder_layers=2,
+        num_classes=13,
+        mask_ratio=0.3,
+        activation="gelu",
+        checkpoint_interval=10,
+        checkpoint_directory="checkpoints",
+        device=None
     ):
-        self.patch_dim = patch_dim
-        self.embedding_dim = embedding_dim
-        self.num_heads = num_heads
-        self.hidden_dim = hidden_dim
-        self.num_classes = num_classes
-        self.mask_ratio = mask_ratio
-
-    def create_model(self):
-        """
-        Creates a newly initialized Transformer.
-        """
-
-        model = Transformer(
-            patch_dim=self.patch_dim,
-            embedding_dim=self.embedding_dim,
-            num_heads=self.num_heads,
-            hidden_dim=self.hidden_dim,
-            num_classes=self.num_classes,
-            mask_ratio=self.mask_ratio
-        )
-
-        return model
-
-    def copy_model_state(self, model):
-        """
-        Creates a detached copy of the model parameters.
-        """
-
-        copied_state = {}
-
-        for parameter_name, parameter_value in (
-            model.state_dict().items()
-        ):
-            copied_state[parameter_name] = (
-                parameter_value
-                .detach()
-                .clone()
+        if checkpoint_interval < 1:
+            raise ValueError(
+                "checkpoint_interval must be at least 1."
             )
 
-        return copied_state
+        self.embedding_dim = embedding_dim
+        self.num_heads = num_heads
+        self.hidden_dims = tuple(hidden_dims)
+        self.num_encoder_layers = num_encoder_layers
+        self.num_classes = num_classes
+        self.mask_ratio = mask_ratio
+        self.activation = activation
 
-    def save_model_checkpoint(
-        self,
-        model,
-        file_path,
-        model_name,
-        label_to_index,
-        index_to_label,
-        validation_loss=None,
-        validation_accuracy=None
-    ):
-        """
-        Saves the custom Transformer parameters and
-        supporting configuration to a .pt checkpoint.
-        """
+        self.checkpoint_interval = (
+            checkpoint_interval
+        )
 
-        file_path = Path(file_path)
+        self.checkpoint_directory = Path(
+            checkpoint_directory
+        )
 
-        file_path.parent.mkdir(
+        self.checkpoint_directory.mkdir(
             parents=True,
             exist_ok=True
         )
 
-        model_state = self.copy_model_state(
-            model
+        if device is None:
+            self.device = torch.device(
+                "cuda"
+                if torch.cuda.is_available()
+                else "cpu"
+            )
+
+        else:
+            self.device = torch.device(
+                device
+            )
+
+    def create_model(
+        self,
+        sample_batch
+    ):
+        """
+        Creates a new Transformer using the patch
+        dimension obtained directly from the data.
+        """
+
+        sample_batch = sample_batch.to(
+            device=self.device,
+            dtype=torch.float32
         )
 
+        model = Transformer(
+            sample_batch=sample_batch,
+            embedding_dim=self.embedding_dim,
+            num_heads=self.num_heads,
+            hidden_dims=self.hidden_dims,
+            num_encoder_layers=(
+                self.num_encoder_layers
+            ),
+            num_classes=self.num_classes,
+            mask_ratio=self.mask_ratio,
+            activation=self.activation
+        )
+
+        return model
+
+    def _copy_value(
+        self,
+        value
+    ):
+        """
+        Recursively creates detached CPU copies
+        of model-state values.
+        """
+
+        if isinstance(
+            value,
+            torch.Tensor
+        ):
+            return (
+                value
+                .detach()
+                .cpu()
+                .clone()
+            )
+
+        if isinstance(
+            value,
+            list
+        ):
+            return [
+                self._copy_value(item)
+                for item in value
+            ]
+
+        if isinstance(
+            value,
+            tuple
+        ):
+            return tuple(
+                self._copy_value(item)
+                for item in value
+            )
+
+        if isinstance(
+            value,
+            dict
+        ):
+            return {
+                key: self._copy_value(item)
+                for key, item
+                in value.items()
+            }
+
+        return copy.deepcopy(
+            value
+        )
+
+    def copy_model_state(
+        self,
+        model
+    ):
+        """
+        Returns an independent CPU copy of the
+        current model parameters.
+        """
+
+        return self._copy_value(
+            model.state_dict()
+        )
+
+    def _create_optimizer(
+        self,
+        model,
+        phase,
+        learning_rate
+    ):
+        """
+        Creates the correct Adam optimizer for
+        unsupervised or supervised training.
+        """
+
+        if phase == "unsupervised":
+
+            parameters = (
+                model.unsupervised_parameters()
+            )
+
+        elif phase == "supervised":
+
+            parameters = (
+                model.supervised_parameters()
+            )
+
+        else:
+            raise ValueError(
+                f"Unknown training phase: {phase}"
+            )
+
+        optimizer = torch.optim.Adam(
+            parameters,
+            lr=learning_rate
+        )
+
+        return optimizer
+
+    def _save_checkpoint(
+        self,
+        model,
+        optimizer,
+        epoch,
+        phase,
+        model_name,
+        label_to_index,
+        index_to_label,
+        best_validation_loss,
+        best_epoch,
+        best_model_state,
+        best_validation_accuracy=None,
+        checkpoint_type="latest"
+    ):
+        """
+        Saves a .pt checkpoint.
+
+        latest:
+            Saves the current model and optimizer so
+            training can be resumed.
+
+        best:
+            Saves the best model for later testing
+            and evaluation.
+        """
+
+        if checkpoint_type not in (
+            "latest",
+            "best"
+        ):
+            raise ValueError(
+                "checkpoint_type must be "
+                "'latest' or 'best'."
+            )
+
         checkpoint = {
-            "model_name": model_name,
-            "model_state_dict": model_state,
+            "model_name":
+                model_name,
+
+            "checkpoint_type":
+                checkpoint_type,
+
+            "phase":
+                phase,
+
+            "epoch":
+                epoch,
+
+            "model_state_dict":
+                self.copy_model_state(
+                    model
+                ),
+
+            "best_validation_loss":
+                best_validation_loss,
+
+            "best_validation_accuracy":
+                best_validation_accuracy,
+
+            "best_epoch":
+                best_epoch,
+
+            "best_model_state_dict":
+                self._copy_value(
+                    best_model_state
+                ),
 
             "model_configuration": {
-                "patch_dim": self.patch_dim,
-                "embedding_dim": self.embedding_dim,
-                "num_heads": self.num_heads,
-                "hidden_dim": self.hidden_dim,
-                "num_classes": self.num_classes,
-                "mask_ratio": self.mask_ratio
+                "patch_dim":
+                    model.patch_dim,
+
+                "embedding_dim":
+                    model.embedding_dim,
+
+                "num_heads":
+                    model.num_heads,
+
+                "hidden_dims":
+                    tuple(
+                        model.hidden_dims
+                    ),
+
+                "num_encoder_layers":
+                    model.num_encoder_layers,
+
+                "num_classes":
+                    model.num_classes,
+
+                "mask_ratio":
+                    model.mask_ratio,
+
+                "activation":
+                    model.activation
             },
 
-            "label_to_index": dict(
-                label_to_index
-            ),
+            "label_to_index":
+                dict(
+                    label_to_index
+                ),
 
-            "index_to_label": dict(
-                index_to_label
-            ),
+            "index_to_label":
+                dict(
+                    index_to_label
+                ),
 
-            "validation_loss": validation_loss,
-            "validation_accuracy": validation_accuracy,
-
-            "saved_at": datetime.now().isoformat(
-                timespec="seconds"
-            )
+            "saved_at":
+                datetime.now().isoformat(
+                    timespec="seconds"
+                )
         }
+
+        if checkpoint_type == "latest":
+
+            checkpoint[
+                "optimizer_state_dict"
+            ] = self._copy_value(
+                optimizer.state_dict()
+            )
+
+            file_name = (
+                f"{model_name}_"
+                f"{phase}_latest.pt"
+            )
+
+        else:
+
+            file_name = (
+                f"{model_name}_"
+                f"{phase}_best.pt"
+            )
+
+        file_path = (
+            self.checkpoint_directory
+            / file_name
+        )
+
+        temporary_path = (
+            file_path.with_suffix(
+                ".tmp"
+            )
+        )
 
         torch.save(
             checkpoint,
+            temporary_path
+        )
+
+        temporary_path.replace(
             file_path
         )
 
-        print(
-            f"Saved model checkpoint: "
-            f"{file_path}"
+        return file_path
+
+    def load_checkpoint(
+        self,
+        checkpoint_path,
+        sample_batch,
+        learning_rate
+    ):
+        """
+        Restores a Transformer and optimizer from
+        a previously saved checkpoint.
+
+        Returns the model, optimizer, next epoch,
+        and checkpoint information.
+        """
+
+        checkpoint_path = Path(
+            checkpoint_path
         )
+
+        if not checkpoint_path.exists():
+            raise FileNotFoundError(
+                f"Checkpoint not found: "
+                f"{checkpoint_path}"
+            )
+
+        checkpoint = torch.load(
+            checkpoint_path,
+            map_location=self.device,
+            weights_only=False
+        )
+
+        configuration = (
+            checkpoint[
+                "model_configuration"
+            ]
+        )
+
+        sample_batch = sample_batch.to(
+            device=self.device,
+            dtype=torch.float32
+        )
+
+        if (
+            sample_batch.shape[-1]
+            != configuration["patch_dim"]
+        ):
+            raise ValueError(
+                "Dataset patch dimension does not "
+                "match the saved checkpoint. "
+                f"Dataset: "
+                f"{sample_batch.shape[-1]}, "
+                f"checkpoint: "
+                f"{configuration['patch_dim']}."
+            )
+
+        model = Transformer(
+            sample_batch=sample_batch,
+            embedding_dim=(
+                configuration[
+                    "embedding_dim"
+                ]
+            ),
+            num_heads=(
+                configuration[
+                    "num_heads"
+                ]
+            ),
+            hidden_dims=tuple(
+                configuration[
+                    "hidden_dims"
+                ]
+            ),
+            num_encoder_layers=(
+                configuration[
+                    "num_encoder_layers"
+                ]
+            ),
+            num_classes=(
+                configuration[
+                    "num_classes"
+                ]
+            ),
+            mask_ratio=(
+                configuration[
+                    "mask_ratio"
+                ]
+            ),
+            activation=(
+                configuration[
+                    "activation"
+                ]
+            )
+        )
+
+        model.load_state_dict(
+            checkpoint[
+                "model_state_dict"
+            ]
+        )
+
+        if (
+            model.W_embedding.device != self.device
+        ):
+            raise RuntimeError(
+                "Loaded model parameters are not "
+                "on the expected device."
+            )
+
+        phase = checkpoint[
+            "phase"
+        ]
+
+        optimizer = self._create_optimizer(
+            model=model,
+            phase=phase,
+            learning_rate=learning_rate
+        )
+
+        optimizer.load_state_dict(
+            checkpoint[
+                "optimizer_state_dict"
+            ]
+        )
+
+        next_epoch = (
+            checkpoint["epoch"] + 1
+        )
+
+        return {
+            "model":
+                model,
+
+            "optimizer":
+                optimizer,
+
+            "next_epoch":
+                next_epoch,
+
+            "phase":
+                phase,
+
+            "best_validation_loss":
+                checkpoint[
+                    "best_validation_loss"
+                ],
+
+            "best_validation_accuracy":
+                checkpoint.get(
+                    "best_validation_accuracy"
+                ),
+
+            "best_epoch":
+                checkpoint[
+                    "best_epoch"
+                ],
+
+            "best_model_state":
+                checkpoint[
+                    "best_model_state_dict"
+                ],
+
+            "label_to_index":
+                checkpoint[
+                    "label_to_index"
+                ],
+
+            "index_to_label":
+                checkpoint[
+                    "index_to_label"
+                ],
+
+            "checkpoint":
+                checkpoint
+        }
 
     def train_unsupervised_epoch(
         self,
@@ -212,15 +580,17 @@ class TrainModelPipeline:
         optimizer
     ):
         """
-        Runs one epoch of masked-patch reconstruction
-        training.
+        Runs one epoch of masked spectrogram
+        reconstruction training.
         """
 
         total_loss = 0.0
         number_of_batches = 0
 
-        for patches in data_loader:
+        for patches, _ in data_loader:
+
             patches = patches.to(
+                device=self.device,
                 dtype=torch.float32
             )
 
@@ -231,28 +601,40 @@ class TrainModelPipeline:
                 reconstructed_patches,
                 mask,
                 attention_weights
-            ) = model.unsupervised_reconstruction(
-                patches
+            ) = (
+                model
+                .unsupervised_reconstruction(
+                    patches
+                )
             )
 
-            if not torch.isfinite(loss):
+            if not torch.isfinite(
+                loss
+            ):
                 raise ValueError(
-                    "The unsupervised loss became NaN "
-                    "or infinite."
+                    "Unsupervised training loss "
+                    "became NaN or infinite."
                 )
 
             loss.backward()
 
             optimizer.step()
 
-            total_loss += loss.item()
+            total_loss += (
+                loss.item()
+            )
+
             number_of_batches += 1
 
         if number_of_batches == 0:
-            return 0.0
+            raise ValueError(
+                "Unsupervised training "
+                "DataLoader contains no batches."
+            )
 
         average_loss = (
-            total_loss / number_of_batches
+            total_loss
+            / number_of_batches
         )
 
         return average_loss
@@ -263,16 +645,19 @@ class TrainModelPipeline:
         data_loader
     ):
         """
-        Runs one epoch of masked-patch reconstruction
-        validation.
+        Runs one epoch of masked spectrogram
+        reconstruction validation.
         """
 
         total_loss = 0.0
         number_of_batches = 0
 
         with torch.no_grad():
-            for patches in data_loader:
+
+            for patches, _ in data_loader:
+
                 patches = patches.to(
+                    device=self.device,
                     dtype=torch.float32
                 )
 
@@ -281,18 +666,36 @@ class TrainModelPipeline:
                     reconstructed_patches,
                     mask,
                     attention_weights
-                ) = model.unsupervised_reconstruction(
-                    patches
+                ) = (
+                    model
+                    .unsupervised_reconstruction(
+                        patches
+                    )
                 )
 
-                total_loss += loss.item()
+                if not torch.isfinite(
+                    loss
+                ):
+                    raise ValueError(
+                        "Unsupervised validation "
+                        "loss became NaN or infinite."
+                    )
+
+                total_loss += (
+                    loss.item()
+                )
+
                 number_of_batches += 1
 
         if number_of_batches == 0:
-            return 0.0
+            raise ValueError(
+                "Unsupervised validation "
+                "DataLoader contains no batches."
+            )
 
         average_loss = (
-            total_loss / number_of_batches
+            total_loss
+            / number_of_batches
         )
 
         return average_loss
@@ -303,49 +706,77 @@ class TrainModelPipeline:
         training_loader,
         validation_loader,
         epochs,
-        learning_rate
+        learning_rate,
+        model_name,
+        label_to_index,
+        index_to_label,
+        optimizer=None,
+        start_epoch=1,
+        best_validation_loss=float("inf"),
+        best_epoch=None,
+        best_model_state=None
     ):
         """
-        Performs masked-patch reconstruction pretraining.
+        Performs masked spectrogram reconstruction.
+
+        The latest model is checkpointed every
+        checkpoint_interval epochs.
+
+        At the end of training, the model with the
+        lowest validation loss is restored and
+        saved separately.
         """
 
-        optimizer = torch.optim.Adam(
-            model.unsupervised_parameters(),
-            lr=learning_rate
-        )
+        if optimizer is None:
 
-        best_validation_loss = float("inf")
-        best_model_state = None
+            optimizer = self._create_optimizer(
+                model=model,
+                phase="unsupervised",
+                learning_rate=learning_rate
+            )
 
-        print("\nUnsupervised pretraining")
-        print("=" * 60)
+        history = []
 
-        for epoch in range(1, epochs + 1):
+        latest_checkpoint_paths = []
+
+        if best_model_state is None:
+
+            best_model_state = (
+                self.copy_model_state(
+                    model
+                )
+            )
+
+        for epoch in tqdm(range(
+            start_epoch,
+            epochs + 1
+        )):
+
             training_loss = (
                 self.train_unsupervised_epoch(
-                    model,
-                    training_loader,
-                    optimizer
+                    model=model,
+                    data_loader=training_loader,
+                    optimizer=optimizer
                 )
             )
 
             validation_loss = (
                 self.validate_unsupervised_epoch(
-                    model,
-                    validation_loader
+                    model=model,
+                    data_loader=validation_loader
                 )
             )
 
-            print(
-                f"Epoch [{epoch}/{epochs}] | "
-                f"Training loss: "
-                f"{training_loss:.6f} | "
-                f"Validation loss: "
-                f"{validation_loss:.6f}"
-            )
+            if (
+                validation_loss
+                < best_validation_loss
+            ):
 
-            if validation_loss < best_validation_loss:
-                best_validation_loss = validation_loss
+                best_validation_loss = (
+                    validation_loss
+                )
+
+                best_epoch = epoch
 
                 best_model_state = (
                     self.copy_model_state(
@@ -353,22 +784,111 @@ class TrainModelPipeline:
                     )
                 )
 
-                print(
-                    "Saved best unsupervised "
-                    "model parameters."
+            history.append({
+                "epoch":
+                    epoch,
+
+                "training_loss":
+                    training_loss,
+
+                "validation_loss":
+                    validation_loss,
+
+                "best_validation_loss":
+                    best_validation_loss,
+
+                "best_epoch":
+                    best_epoch
+            })
+
+            if (
+                epoch
+                % self.checkpoint_interval
+                == 0
+            ):
+
+                checkpoint_path = (
+                    self._save_checkpoint(
+                        model=model,
+                        optimizer=optimizer,
+                        epoch=epoch,
+                        phase="unsupervised",
+                        model_name=model_name,
+                        label_to_index=(
+                            label_to_index
+                        ),
+                        index_to_label=(
+                            index_to_label
+                        ),
+                        best_validation_loss=(
+                            best_validation_loss
+                        ),
+                        best_epoch=(
+                            best_epoch
+                        ),
+                        best_model_state=(
+                            best_model_state
+                        ),
+                        checkpoint_type=(
+                            "latest"
+                        )
+                    )
                 )
 
-        if best_model_state is not None:
-            model.load_state_dict(
-                best_model_state
-            )
+                latest_checkpoint_paths.append(
+                    checkpoint_path
+                )
 
-        print(
-            "\nBest unsupervised validation loss: "
-            f"{best_validation_loss:.6f}"
+        model.load_state_dict(
+            best_model_state
         )
 
-        return model
+        best_checkpoint_path = (
+            self._save_checkpoint(
+                model=model,
+                optimizer=optimizer,
+                epoch=best_epoch,
+                phase="unsupervised",
+                model_name=model_name,
+                label_to_index=(
+                    label_to_index
+                ),
+                index_to_label=(
+                    index_to_label
+                ),
+                best_validation_loss=(
+                    best_validation_loss
+                ),
+                best_epoch=best_epoch,
+                best_model_state=(
+                    best_model_state
+                ),
+                checkpoint_type="best"
+            )
+        )
+
+        return {
+            "model":
+                model,
+
+            "optimizer":
+                optimizer,
+
+            "history":
+                history,
+
+            "best_validation_loss":
+                best_validation_loss,
+
+            "best_epoch":
+                best_epoch,
+
+            "latest_checkpoint_paths":
+                latest_checkpoint_paths,
+
+            "best_checkpoint_path":
+                best_checkpoint_path
+        }
 
     def train_supervised_epoch(
         self,
@@ -377,8 +897,8 @@ class TrainModelPipeline:
         optimizer
     ):
         """
-        Runs one epoch of supervised classification
-        training.
+        Runs one epoch of supervised instrument
+        classification training.
         """
 
         total_loss = 0.0
@@ -387,11 +907,14 @@ class TrainModelPipeline:
         number_of_batches = 0
 
         for patches, labels in data_loader:
+
             patches = patches.to(
+                device=self.device,
                 dtype=torch.float32
             )
 
             labels = labels.to(
+                device=self.device,
                 dtype=torch.long
             )
 
@@ -403,44 +926,61 @@ class TrainModelPipeline:
                 predicted_classes,
                 probabilities,
                 attention_weights
-            ) = model.supervised_fine_tuning(
-                patches,
-                labels
+            ) = (
+                model
+                .supervised_fine_tuning(
+                    patches,
+                    labels
+                )
             )
 
-            if not torch.isfinite(loss):
+            if not torch.isfinite(
+                loss
+            ):
                 raise ValueError(
-                    "The supervised loss became NaN "
-                    "or infinite."
+                    "Supervised training loss "
+                    "became NaN or infinite."
                 )
 
             loss.backward()
 
             optimizer.step()
 
-            total_loss += loss.item()
+            total_loss += (
+                loss.item()
+            )
 
             total_correct += (
-                predicted_classes == labels
+                predicted_classes
+                == labels
             ).sum().item()
 
-            total_samples += labels.shape[0]
+            total_samples += (
+                labels.shape[0]
+            )
+
             number_of_batches += 1
 
         if number_of_batches == 0:
-            return 0.0, 0.0
+            raise ValueError(
+                "Supervised training DataLoader "
+                "contains no batches."
+            )
 
         average_loss = (
-            total_loss / number_of_batches
+            total_loss
+            / number_of_batches
         )
 
         accuracy = (
-            total_correct / total_samples
-            if total_samples > 0
-            else 0.0
+            total_correct
+            / total_samples
         )
 
-        return average_loss, accuracy
+        return (
+            average_loss,
+            accuracy
+        )
 
     def validate_supervised_epoch(
         self,
@@ -448,8 +988,8 @@ class TrainModelPipeline:
         data_loader
     ):
         """
-        Runs one epoch of supervised classification
-        validation.
+        Runs one epoch of supervised instrument
+        classification validation.
         """
 
         total_loss = 0.0
@@ -458,12 +998,16 @@ class TrainModelPipeline:
         number_of_batches = 0
 
         with torch.no_grad():
+
             for patches, labels in data_loader:
+
                 patches = patches.to(
+                    device=self.device,
                     dtype=torch.float32
                 )
 
                 labels = labels.to(
+                    device=self.device,
                     dtype=torch.long
                 )
 
@@ -473,34 +1017,57 @@ class TrainModelPipeline:
                     predicted_classes,
                     probabilities,
                     attention_weights
-                ) = model.supervised_fine_tuning(
-                    patches,
-                    labels
+                ) = (
+                    model
+                    .supervised_fine_tuning(
+                        patches,
+                        labels
+                    )
                 )
 
-                total_loss += loss.item()
+                if not torch.isfinite(
+                    loss
+                ):
+                    raise ValueError(
+                        "Supervised validation "
+                        "loss became NaN or infinite."
+                    )
+
+                total_loss += (
+                    loss.item()
+                )
 
                 total_correct += (
-                    predicted_classes == labels
+                    predicted_classes
+                    == labels
                 ).sum().item()
 
-                total_samples += labels.shape[0]
+                total_samples += (
+                    labels.shape[0]
+                )
+
                 number_of_batches += 1
 
         if number_of_batches == 0:
-            return 0.0, 0.0
+            raise ValueError(
+                "Supervised validation "
+                "DataLoader contains no batches."
+            )
 
         average_loss = (
-            total_loss / number_of_batches
+            total_loss
+            / number_of_batches
         )
 
         accuracy = (
-            total_correct / total_samples
-            if total_samples > 0
-            else 0.0
+            total_correct
+            / total_samples
         )
 
-        return average_loss, accuracy
+        return (
+            average_loss,
+            accuracy
+        )
 
     def fine_tune_supervised(
         self,
@@ -509,58 +1076,78 @@ class TrainModelPipeline:
         validation_loader,
         epochs,
         learning_rate,
-        model_path,
         model_name,
         label_to_index,
         index_to_label,
+        optimizer=None,
+        start_epoch=1,
+        best_validation_loss=float("inf"),
+        best_validation_accuracy=0.0,
+        best_epoch=None,
+        best_model_state=None
     ):
         """
-        Trains a Transformer on labelled data.
+        Performs supervised instrument
+        classification training.
+
+        The latest model is checkpointed every
+        checkpoint_interval epochs.
+
+        At the end, the model with the lowest
+        validation loss is restored and saved.
         """
 
-        optimizer = torch.optim.Adam(
-            model.supervised_parameters(),
-            lr=learning_rate
-        )
+        if optimizer is None:
 
-        best_validation_loss = float("inf")
-        best_validation_accuracy = 0.0
-        best_model_state = None
+            optimizer = self._create_optimizer(
+                model=model,
+                phase="supervised",
+                learning_rate=learning_rate
+            )
 
-        print("\nSupervised training")
-        print("=" * 60)
+        history = []
 
-        for epoch in range(1, epochs + 1):
+        latest_checkpoint_paths = []
+
+        if best_model_state is None:
+
+            best_model_state = (
+                self.copy_model_state(
+                    model
+                )
+            )
+
+        for epoch in tqdm(range(
+            start_epoch,
+            epochs + 1
+        )):
+
             (
                 training_loss,
                 training_accuracy
-            ) = self.train_supervised_epoch(
-                model,
-                training_loader,
-                optimizer
+            ) = (
+                self.train_supervised_epoch(
+                    model=model,
+                    data_loader=training_loader,
+                    optimizer=optimizer
+                )
             )
 
             (
                 validation_loss,
                 validation_accuracy
-            ) = self.validate_supervised_epoch(
-                model,
-                validation_loader
+            ) = (
+                self.validate_supervised_epoch(
+                    model=model,
+                    data_loader=validation_loader
+                )
             )
 
-            print(
-                f"Epoch [{epoch}/{epochs}] | "
-                f"Training loss: "
-                f"{training_loss:.6f} | "
-                f"Training accuracy: "
-                f"{training_accuracy * 100:.2f}% | "
-                f"Validation loss: "
-                f"{validation_loss:.6f} | "
-                f"Validation accuracy: "
-                f"{validation_accuracy * 100:.2f}%"
-            )
+            if (
+                validation_loss
+                < best_validation_loss
+            ):
 
-            if validation_loss < best_validation_loss:
                 best_validation_loss = (
                     validation_loss
                 )
@@ -569,50 +1156,141 @@ class TrainModelPipeline:
                     validation_accuracy
                 )
 
+                best_epoch = epoch
+
                 best_model_state = (
                     self.copy_model_state(
                         model
                     )
                 )
 
-                print(
-                    "Saved best supervised "
-                    "model parameters."
+            history.append({
+                "epoch":
+                    epoch,
+
+                "training_loss":
+                    training_loss,
+
+                "training_accuracy":
+                    training_accuracy,
+
+                "validation_loss":
+                    validation_loss,
+
+                "validation_accuracy":
+                    validation_accuracy,
+
+                "best_validation_loss":
+                    best_validation_loss,
+
+                "best_validation_accuracy":
+                    best_validation_accuracy,
+
+                "best_epoch":
+                    best_epoch
+            })
+
+            if (
+                epoch
+                % self.checkpoint_interval
+                == 0
+            ):
+
+                checkpoint_path = (
+                    self._save_checkpoint(
+                        model=model,
+                        optimizer=optimizer,
+                        epoch=epoch,
+                        phase="supervised",
+                        model_name=model_name,
+                        label_to_index=(
+                            label_to_index
+                        ),
+                        index_to_label=(
+                            index_to_label
+                        ),
+                        best_validation_loss=(
+                            best_validation_loss
+                        ),
+                        best_validation_accuracy=(
+                            best_validation_accuracy
+                        ),
+                        best_epoch=(
+                            best_epoch
+                        ),
+                        best_model_state=(
+                            best_model_state
+                        ),
+                        checkpoint_type=(
+                            "latest"
+                        )
+                    )
                 )
 
-        if best_model_state is not None:
-            model.load_state_dict(
-                best_model_state
-            )
+                latest_checkpoint_paths.append(
+                    checkpoint_path
+                )
 
-            self.save_model_checkpoint(
+        model.load_state_dict(
+            best_model_state
+        )
+
+        best_checkpoint_path = (
+            self._save_checkpoint(
                 model=model,
-                file_path=model_path,
+                optimizer=optimizer,
+                epoch=best_epoch,
+                phase="supervised",
                 model_name=model_name,
-                label_to_index=label_to_index,
-                index_to_label=index_to_label,
-                validation_loss=(
+                label_to_index=(
+                    label_to_index
+                ),
+                index_to_label=(
+                    index_to_label
+                ),
+                best_validation_loss=(
                     best_validation_loss
                 ),
-                validation_accuracy=(
+                best_validation_accuracy=(
                     best_validation_accuracy
-                )
+                ),
+                best_epoch=best_epoch,
+                best_model_state=(
+                    best_model_state
+                ),
+                checkpoint_type="best"
             )
-
-        print(
-            "\nBest supervised validation loss: "
-            f"{best_validation_loss:.6f}"
         )
 
-        print(
-            "Best supervised validation accuracy: "
-            f"{best_validation_accuracy * 100:.2f}%"
-        )
+        return {
+            "model":
+                model,
 
-        return model
+            "optimizer":
+                optimizer,
+
+            "history":
+                history,
+
+            "best_validation_loss":
+                best_validation_loss,
+
+            "best_validation_accuracy":
+                best_validation_accuracy,
+
+            "best_epoch":
+                best_epoch,
+
+            "latest_checkpoint_paths":
+                latest_checkpoint_paths,
+
+            "best_checkpoint_path":
+                best_checkpoint_path
+        }
 
     def train_pretrained_and_fine_tuned_model(
         self,
+        sample_batch,
         unsupervised_training_loader,
         unsupervised_validation_loader,
         supervised_training_loader,
@@ -621,897 +1299,331 @@ class TrainModelPipeline:
         supervised_epochs,
         unsupervised_learning_rate,
         supervised_learning_rate,
-        model_path,
+        model_name,
         label_to_index,
         index_to_label
     ):
         """
-        Creates a Transformer, performs unsupervised
-        pretraining, and then performs supervised
-        fine-tuning.
+        Creates a model, performs unsupervised
+        pretraining, then supervised fine-tuning.
         """
 
-        model = self.create_model()
+        model = self.create_model(
+            sample_batch
+        )
 
-        model = self.pretrain_unsupervised(
-            model=model,
-            training_loader=(
-                unsupervised_training_loader
-            ),
-            validation_loader=(
-                unsupervised_validation_loader
-            ),
-            epochs=unsupervised_epochs,
-            learning_rate=(
-                unsupervised_learning_rate
+        unsupervised_results = (
+            self.pretrain_unsupervised(
+                model=model,
+                training_loader=(
+                    unsupervised_training_loader
+                ),
+                validation_loader=(
+                    unsupervised_validation_loader
+                ),
+                epochs=unsupervised_epochs,
+                learning_rate=(
+                    unsupervised_learning_rate
+                ),
+                model_name=model_name,
+                label_to_index=(
+                    label_to_index
+                ),
+                index_to_label=(
+                    index_to_label
+                )
             )
         )
 
-        model = self.fine_tune_supervised(
-            model=model,
-            training_loader=(
-                supervised_training_loader
-            ),
-            validation_loader=(
-                supervised_validation_loader
-            ),
-            epochs=supervised_epochs,
-            learning_rate=(
-                supervised_learning_rate
-            ),
-            model_path=model_path,
-            model_name=(
-                "Pretrained and fine-tuned Transformer"
-            ),
-            label_to_index=label_to_index,
-            index_to_label=index_to_label
+        model = (
+            unsupervised_results[
+                "model"
+            ]
         )
 
-        return model
+        supervised_results = (
+            self.fine_tune_supervised(
+                model=model,
+                training_loader=(
+                    supervised_training_loader
+                ),
+                validation_loader=(
+                    supervised_validation_loader
+                ),
+                epochs=supervised_epochs,
+                learning_rate=(
+                    supervised_learning_rate
+                ),
+                model_name=model_name,
+                label_to_index=(
+                    label_to_index
+                ),
+                index_to_label=(
+                    index_to_label
+                )
+            )
+        )
+
+        return {
+            "model":
+                supervised_results[
+                    "model"
+                ],
+
+            "unsupervised_results":
+                unsupervised_results,
+
+            "supervised_results":
+                supervised_results
+        }
 
     def train_supervised_only_model(
         self,
+        sample_batch,
         supervised_training_loader,
         supervised_validation_loader,
         epochs,
         learning_rate,
-        model_path,
+        model_name,
         label_to_index,
         index_to_label
     ):
         """
-        Creates a newly initialized Transformer and trains
-        it only on the supervised dataset.
+        Creates a new Transformer and trains it
+        using only supervised classification.
         """
 
-        model = self.create_model()
-
-        model = self.fine_tune_supervised(
-            model=model,
-            training_loader=(
-                supervised_training_loader
-            ),
-            validation_loader=(
-                supervised_validation_loader
-            ),
-            epochs=epochs,
-            learning_rate=learning_rate,
-            model_path=model_path,
-            model_name=(
-                "Supervised-only Transformer"
-            ),
-            label_to_index=label_to_index,
-            index_to_label=index_to_label
+        model = self.create_model(
+            sample_batch
         )
 
-        return model
-
-    def test_model(
-        self,
-        model,
-        test_loader,
-        model_name,
-        index_to_label
-    ):
-        """
-        Evaluates a trained Transformer on the test dataset
-        using scikit-learn classification metrics.
-        """
-
-        total_loss = 0.0
-        number_of_batches = 0
-
-        true_labels = []
-        predicted_labels = []
-
-        with torch.no_grad():
-            for patches, labels in test_loader:
-                patches = patches.to(
-                    dtype=torch.float32
+        results = (
+            self.fine_tune_supervised(
+                model=model,
+                training_loader=(
+                    supervised_training_loader
+                ),
+                validation_loader=(
+                    supervised_validation_loader
+                ),
+                epochs=epochs,
+                learning_rate=learning_rate,
+                model_name=model_name,
+                label_to_index=(
+                    label_to_index
+                ),
+                index_to_label=(
+                    index_to_label
                 )
-
-                labels = labels.to(
-                    dtype=torch.long
-                )
-
-                (
-                    loss,
-                    logits,
-                    predicted_classes,
-                    probabilities,
-                    attention_weights
-                ) = model.supervised_fine_tuning(
-                    patches,
-                    labels
-                )
-
-                if not torch.isfinite(loss):
-                    raise ValueError(
-                        "The test loss became NaN or infinite."
-                    )
-
-                total_loss += loss.item()
-                number_of_batches += 1
-
-                true_labels.extend(
-                    labels
-                    .detach()
-                    .cpu()
-                    .tolist()
-                )
-
-                predicted_labels.extend(
-                    predicted_classes
-                    .detach()
-                    .cpu()
-                    .tolist()
-                )
-
-        if number_of_batches == 0:
-            raise ValueError(
-                "The test DataLoader contains no batches."
-            )
-
-        if len(true_labels) == 0:
-            raise ValueError(
-                "The test dataset contains no labelled samples."
-            )
-
-        average_test_loss = (
-            total_loss / number_of_batches
-        )
-
-        class_indices = list(
-            range(self.num_classes)
-        )
-
-        class_names = [
-            index_to_label.get(
-                class_index,
-                str(class_index)
-            )
-            for class_index in class_indices
-        ]
-
-        test_accuracy = accuracy_score(
-            true_labels,
-            predicted_labels
-        )
-
-        (
-            macro_precision,
-            macro_recall,
-            macro_f1,
-            _
-        ) = precision_recall_fscore_support(
-            true_labels,
-            predicted_labels,
-            labels=class_indices,
-            average="macro",
-            zero_division=0
-        )
-
-        (
-            weighted_precision,
-            weighted_recall,
-            weighted_f1,
-            _
-        ) = precision_recall_fscore_support(
-            true_labels,
-            predicted_labels,
-            labels=class_indices,
-            average="weighted",
-            zero_division=0
-        )
-
-        report_text = classification_report(
-            true_labels,
-            predicted_labels,
-            labels=class_indices,
-            target_names=class_names,
-            digits=4,
-            zero_division=0
-        )
-
-        report_dictionary = classification_report(
-            true_labels,
-            predicted_labels,
-            labels=class_indices,
-            target_names=class_names,
-            output_dict=True,
-            zero_division=0
-        )
-
-        confusion_matrix_values = confusion_matrix(
-            true_labels,
-            predicted_labels,
-            labels=class_indices
-        )
-
-        print(f"\nTest results: {model_name}")
-        print("=" * 80)
-
-        print(
-            f"Test loss: "
-            f"{average_test_loss:.6f}"
-        )
-
-        print(
-            f"Test accuracy: "
-            f"{test_accuracy * 100:.2f}%"
-        )
-
-        print("\nMacro-average metrics")
-        print("-" * 80)
-
-        print(
-            f"Precision: "
-            f"{macro_precision:.4f}"
-        )
-
-        print(
-            f"Recall: "
-            f"{macro_recall:.4f}"
-        )
-
-        print(
-            f"F1-score: "
-            f"{macro_f1:.4f}"
-        )
-
-        print("\nWeighted-average metrics")
-        print("-" * 80)
-
-        print(
-            f"Precision: "
-            f"{weighted_precision:.4f}"
-        )
-
-        print(
-            f"Recall: "
-            f"{weighted_recall:.4f}"
-        )
-
-        print(
-            f"F1-score: "
-            f"{weighted_f1:.4f}"
-        )
-
-        print("\nClassification report")
-        print("-" * 80)
-        print(report_text)
-
-        print("Confusion matrix")
-        print("-" * 80)
-        print(confusion_matrix_values)
-
-        return {
-            "model_name": model_name,
-            "test_loss": average_test_loss,
-            "accuracy": test_accuracy,
-
-            "macro_precision": macro_precision,
-            "macro_recall": macro_recall,
-            "macro_f1": macro_f1,
-
-            "weighted_precision": weighted_precision,
-            "weighted_recall": weighted_recall,
-            "weighted_f1": weighted_f1,
-
-            "classification_report": report_dictionary,
-            "confusion_matrix": confusion_matrix_values,
-
-            "true_labels": true_labels,
-            "predicted_labels": predicted_labels
-        }
-
-    def save_test_results_pdf(
-        self,
-        test_results,
-        file_path,
-        index_to_label
-    ):
-        """
-        Saves model test results, classification metrics,
-        and the confusion matrix to a PDF file.
-        """
-
-        file_path = Path(file_path)
-
-        file_path.parent.mkdir(
-            parents=True,
-            exist_ok=True
-        )
-
-        document = SimpleDocTemplate(
-            str(file_path),
-            pagesize=landscape(A4),
-            rightMargin=30,
-            leftMargin=30,
-            topMargin=30,
-            bottomMargin=30
-        )
-
-        styles = getSampleStyleSheet()
-        elements = []
-
-        model_name = test_results[
-            "model_name"
-        ]
-
-        elements.append(
-            Paragraph(
-                f"Test Results: {model_name}",
-                styles["Title"]
             )
         )
 
-        elements.append(
-            Spacer(1, 12)
-        )
-
-        elements.append(
-            Paragraph(
-                "Overall Metrics",
-                styles["Heading2"]
-            )
-        )
-
-        overall_metrics_data = [
-            [
-                "Metric",
-                "Value"
-            ],
-            [
-                "Test loss",
-                f"{test_results['test_loss']:.6f}"
-            ],
-            [
-                "Accuracy",
-                f"{test_results['accuracy'] * 100:.2f}%"
-            ],
-            [
-                "Macro precision",
-                f"{test_results['macro_precision']:.4f}"
-            ],
-            [
-                "Macro recall",
-                f"{test_results['macro_recall']:.4f}"
-            ],
-            [
-                "Macro F1-score",
-                f"{test_results['macro_f1']:.4f}"
-            ],
-            [
-                "Weighted precision",
-                f"{test_results['weighted_precision']:.4f}"
-            ],
-            [
-                "Weighted recall",
-                f"{test_results['weighted_recall']:.4f}"
-            ],
-            [
-                "Weighted F1-score",
-                f"{test_results['weighted_f1']:.4f}"
-            ]
-        ]
-
-        overall_metrics_table = Table(
-            overall_metrics_data,
-            colWidths=[180, 180]
-        )
-
-        overall_metrics_table.setStyle(
-            TableStyle([
-                (
-                    "BACKGROUND",
-                    (0, 0),
-                    (-1, 0),
-                    colors.lightgrey
-                ),
-                (
-                    "GRID",
-                    (0, 0),
-                    (-1, -1),
-                    0.5,
-                    colors.black
-                ),
-                (
-                    "FONTNAME",
-                    (0, 0),
-                    (-1, 0),
-                    "Helvetica-Bold"
-                ),
-                (
-                    "ALIGN",
-                    (1, 1),
-                    (-1, -1),
-                    "CENTER"
-                ),
-                (
-                    "VALIGN",
-                    (0, 0),
-                    (-1, -1),
-                    "MIDDLE"
-                ),
-                (
-                    "BOTTOMPADDING",
-                    (0, 0),
-                    (-1, 0),
-                    8
-                ),
-                (
-                    "TOPPADDING",
-                    (0, 0),
-                    (-1, 0),
-                    8
-                )
-            ])
-        )
-
-        elements.append(
-            overall_metrics_table
-        )
-
-        elements.append(
-            Spacer(1, 20)
-        )
-
-        elements.append(
-            Paragraph(
-                "Classification Report",
-                styles["Heading2"]
-            )
-        )
-
-        report = test_results[
-            "classification_report"
-        ]
-
-        report_table_data = [
-            [
-                "Class",
-                "Precision",
-                "Recall",
-                "F1-score",
-                "Support"
-            ]
-        ]
-
-        class_names = [
-            index_to_label[index]
-            for index in range(
-                self.num_classes
-            )
-        ]
-
-        for class_name in class_names:
-            class_results = report.get(
-                class_name,
-                {}
-            )
-
-            report_table_data.append([
-                class_name,
-                (
-                    f"{class_results.get('precision', 0.0):.4f}"
-                ),
-                (
-                    f"{class_results.get('recall', 0.0):.4f}"
-                ),
-                (
-                    f"{class_results.get('f1-score', 0.0):.4f}"
-                ),
-                int(
-                    class_results.get(
-                        "support",
-                        0
-                    )
-                )
-            ])
-
-        for average_name, display_name in [
-            ("macro avg", "Macro average"),
-            ("weighted avg", "Weighted average")
-        ]:
-            average_results = report.get(
-                average_name,
-                {}
-            )
-
-            report_table_data.append([
-                display_name,
-                (
-                    f"{average_results.get('precision', 0.0):.4f}"
-                ),
-                (
-                    f"{average_results.get('recall', 0.0):.4f}"
-                ),
-                (
-                    f"{average_results.get('f1-score', 0.0):.4f}"
-                ),
-                int(
-                    average_results.get(
-                        "support",
-                        0
-                    )
-                )
-            ])
-
-        report_table = Table(
-            report_table_data,
-            repeatRows=1,
-            colWidths=[
-                150,
-                90,
-                90,
-                90,
-                80
-            ]
-        )
-
-        report_table.setStyle(
-            TableStyle([
-                (
-                    "BACKGROUND",
-                    (0, 0),
-                    (-1, 0),
-                    colors.lightgrey
-                ),
-                (
-                    "GRID",
-                    (0, 0),
-                    (-1, -1),
-                    0.5,
-                    colors.black
-                ),
-                (
-                    "FONTNAME",
-                    (0, 0),
-                    (-1, 0),
-                    "Helvetica-Bold"
-                ),
-                (
-                    "ALIGN",
-                    (1, 1),
-                    (-1, -1),
-                    "CENTER"
-                ),
-                (
-                    "VALIGN",
-                    (0, 0),
-                    (-1, -1),
-                    "MIDDLE"
-                ),
-                (
-                    "FONTSIZE",
-                    (0, 0),
-                    (-1, -1),
-                    8
-                )
-            ])
-        )
-
-        elements.append(
-            report_table
-        )
-
-        elements.append(
-            PageBreak()
-        )
-
-        elements.append(
-            Paragraph(
-                "Confusion Matrix",
-                styles["Heading2"]
-            )
-        )
-
-        elements.append(
-            Paragraph(
-                "Rows represent true classes. "
-                "Columns represent predicted classes.",
-                styles["BodyText"]
-            )
-        )
-
-        elements.append(
-            Spacer(1, 10)
-        )
-
-        confusion_matrix_values = (
-            test_results[
-                "confusion_matrix"
-            ]
-        )
-
-        confusion_header = [
-            "True / Pred."
-        ] + [
-            str(index)
-            for index in range(
-                self.num_classes
-            )
-        ]
-
-        confusion_table_data = [
-            confusion_header
-        ]
-
-        for class_index, matrix_row in enumerate(
-            confusion_matrix_values
-        ):
-            confusion_table_data.append(
-                [
-                    str(class_index)
-                ] + [
-                    int(value)
-                    for value in matrix_row
-                ]
-            )
-
-        number_of_columns = (
-            self.num_classes + 1
-        )
-
-        available_width = (
-            landscape(A4)[0] - 60
-        )
-
-        column_width = (
-            available_width
-            / number_of_columns
-        )
-
-        confusion_table = Table(
-            confusion_table_data,
-            repeatRows=1,
-            colWidths=[
-                column_width
-            ] * number_of_columns
-        )
-
-        confusion_table.setStyle(
-            TableStyle([
-                (
-                    "BACKGROUND",
-                    (0, 0),
-                    (-1, 0),
-                    colors.lightgrey
-                ),
-                (
-                    "BACKGROUND",
-                    (0, 0),
-                    (0, -1),
-                    colors.lightgrey
-                ),
-                (
-                    "GRID",
-                    (0, 0),
-                    (-1, -1),
-                    0.4,
-                    colors.black
-                ),
-                (
-                    "FONTNAME",
-                    (0, 0),
-                    (-1, 0),
-                    "Helvetica-Bold"
-                ),
-                (
-                    "FONTNAME",
-                    (0, 0),
-                    (0, -1),
-                    "Helvetica-Bold"
-                ),
-                (
-                    "ALIGN",
-                    (0, 0),
-                    (-1, -1),
-                    "CENTER"
-                ),
-                (
-                    "VALIGN",
-                    (0, 0),
-                    (-1, -1),
-                    "MIDDLE"
-                ),
-                (
-                    "FONTSIZE",
-                    (0, 0),
-                    (-1, -1),
-                    6
-                )
-            ])
-        )
-
-        elements.append(
-            confusion_table
-        )
-
-        elements.append(
-            Spacer(1, 16)
-        )
-
-        elements.append(
-            Paragraph(
-                "Class Index Key",
-                styles["Heading3"]
-            )
-        )
-
-        class_key_data = [
-            ["Index", "Class"]
-        ]
-
-        for class_index in range(
-            self.num_classes
-        ):
-            class_key_data.append([
-                class_index,
-                index_to_label[
-                    class_index
-                ]
-            ])
-
-        class_key_table = Table(
-            class_key_data,
-            repeatRows=1,
-            colWidths=[80, 220]
-        )
-
-        class_key_table.setStyle(
-            TableStyle([
-                (
-                    "BACKGROUND",
-                    (0, 0),
-                    (-1, 0),
-                    colors.lightgrey
-                ),
-                (
-                    "GRID",
-                    (0, 0),
-                    (-1, -1),
-                    0.5,
-                    colors.black
-                ),
-                (
-                    "FONTNAME",
-                    (0, 0),
-                    (-1, 0),
-                    "Helvetica-Bold"
-                ),
-                (
-                    "ALIGN",
-                    (0, 0),
-                    (0, -1),
-                    "CENTER"
-                ),
-                (
-                    "FONTSIZE",
-                    (0, 0),
-                    (-1, -1),
-                    8
-                )
-            ])
-        )
-
-        elements.append(
-            class_key_table
-        )
-
-        document.build(
-            elements
-        )
-
-        print(
-            f"Saved test-results PDF: "
-            f"{file_path}"
-        )
-
+        return results
 
 if __name__ == "__main__":
-    # Datasets
-    unsupervised_train_dataset, unsupervised_val_dataset= create_unsupervised_datasets(UNSUPERVISED_DATASET_PATHS)
-    supervised_training_dataset, supervised_validation_dataset, supervised_test_dataset, label_to_index, index_to_label = create_supervised_datasets(BABY_SLAKH_DATASET_PATH)
-    num_classes = len(label_to_index)
+
+    # Create Datasets
+    print("Creating datasets...")
+    (
+        supervised_training_dataset,
+        supervised_validation_dataset,
+        unsupervised_training_dataset,
+        unsupervised_validation_dataset,
+        _,
+        label_to_index_val,
+        label_to_index_test
+    ) = create_datasets(
+        training_path=(
+            SLAKH2100_REDUX_16K_TRAIN
+        ),
+        validation_path=(
+            SLAKH2100_REDUX_16K_VALIDATION
+        ),
+        test_path=(
+            SLAKH2100_REDUX_16K_TEST
+        ),
+        data_representation=(
+            DATA_REPRESENTATION
+        ),
+        set_limit=SET_LIMIT,
+        maximum_tracks=MAXIMUM_TRACKS
+    )
+
+    # Retrieve model label mappings
+    (
+        label_to_index,
+        index_to_label
+    ) = (
+        supervised_training_dataset
+        .return_label_mappings()
+    )
+
+    num_classes = len(
+        label_to_index
+    )
+
 
     # Check datasets
-    print("Dataset Information:...........................................................................................")
-    print(f"Unsupervised training dataset size: {len(unsupervised_train_dataset)}")
-    print(f"Unsupervised validation dataset size: {len(unsupervised_val_dataset)}")
-    print(f"Supervised training dataset size: {len(supervised_training_dataset)}")
-    print(f"Supervised validation dataset size: {len(supervised_validation_dataset)}")
-    print(f"Supervised test dataset size: {len(supervised_test_dataset)}")
-    print(f"Label to index mapping: {label_to_index}")
-    print(f"Index to label mapping: {index_to_label}")
-    print(f"Number of classes: {num_classes}")
-    print("..................................................................................................................")
+    print(
+        "\nDataset Information"
+    )
+
+    print("=" * 70)
+
+    print(
+        "Unsupervised training dataset size:",
+        len(
+            unsupervised_training_dataset
+        )
+    )
+
+    print(
+        "Unsupervised validation dataset size:",
+        len(
+            unsupervised_validation_dataset
+        )
+    )
+
+    print(
+        "Supervised training dataset size:",
+        len(
+            supervised_training_dataset
+        )
+    )
+
+    print(
+        "Supervised validation dataset size:",
+        len(
+            supervised_validation_dataset
+        )
+    )
+
+    print(
+        "Label to index mapping:",
+        label_to_index
+    )
+
+    print(
+        "Index to label mapping:",
+        index_to_label
+    )
+
+    print(
+        "Number of classes:",
+        num_classes
+    )
+
+    print(
+        "Training mapping matches "
+        "validation mapping:",
+        label_to_index
+        == label_to_index_val
+    )
+
+    print(
+        "Training mapping matches "
+        "test mapping:",
+        label_to_index
+        == label_to_index_test
+    )
 
     # DataLoaders
-    unsupervised_train_loader = DataLoader(
-        unsupervised_train_dataset,
+    unsupervised_training_loader = DataLoader(
+        unsupervised_training_dataset,
         batch_size=BATCH_SIZE,
         shuffle=True
     )
 
-    unsupervised_val_loader = DataLoader(
-        unsupervised_val_dataset,
+    unsupervised_validation_loader = DataLoader(
+        unsupervised_validation_dataset,
         batch_size=BATCH_SIZE,
         shuffle=False
     )
 
-    supervised_train_loader = DataLoader(
+    supervised_training_loader = DataLoader(
         supervised_training_dataset,
         batch_size=BATCH_SIZE,
         shuffle=True
     )
 
-    supervised_val_loader = DataLoader(
+    supervised_validation_loader = DataLoader(
         supervised_validation_dataset,
         batch_size=BATCH_SIZE,
         shuffle=False
     )
 
-    supervised_test_loader = DataLoader(
-        supervised_test_dataset,
-        batch_size=BATCH_SIZE,
-        shuffle=False
+    # Get sample batch for Transformer initialization
+    (
+        sample_batch,
+        _
+    ) = next(
+        iter(
+            supervised_training_loader
+        )
     )
 
     # Train and evaluate the model
     training_pipeline = TrainModelPipeline(
-        patch_dim=PATCH_DIM,
         embedding_dim=EMBEDDING_DIM,
         num_heads=NUM_HEADS,
-        hidden_dim=HIDDEN_DIM,
+        hidden_dims=HIDDEN_DIMS,
+        num_encoder_layers=(
+            NUM_ENCODER_LAYERS
+        ),
         num_classes=num_classes,
-        mask_ratio=MASK_RATIO
+        mask_ratio=MASK_RATIO,
+        activation=ACTIVATION,
+        checkpoint_interval=(
+            CHECKPOINT_INTERVAL
+        ),
+        checkpoint_directory=(
+            CHECKPOINT_DIRECTORY
+        )
     )
 
-    # Train and evaluate the model with unsupervised pretraining followed by supervised fine-tuning
+    print(
+    "\nTraining device:",
+    training_pipeline.device
+    )
+
+    print(
+        "CUDA available:",
+        torch.cuda.is_available()
+    )
+
+    if torch.cuda.is_available():
+        print(
+            "GPU:",
+            torch.cuda.get_device_name(0)
+        )
+
+    # Unsupervised pretraining + supervised fine-tuning
     print("\n")
     print("#" * 70)
+
     print(
         "MODEL 1: UNSUPERVISED PRETRAINING "
         "FOLLOWED BY SUPERVISED FINE-TUNING"
     )
+
     print("#" * 70)
 
-    pretrained_fine_tuned_model = (
+
+    pretrained_results = (
         training_pipeline
         .train_pretrained_and_fine_tuned_model(
+            sample_batch=sample_batch,
             unsupervised_training_loader=(
-                unsupervised_train_loader
+                unsupervised_training_loader
             ),
             unsupervised_validation_loader=(
-                unsupervised_val_loader
+                unsupervised_validation_loader
             ),
             supervised_training_loader=(
-                supervised_train_loader
+                supervised_training_loader
             ),
             supervised_validation_loader=(
-                supervised_val_loader
+                supervised_validation_loader
             ),
             unsupervised_epochs=(
                 UNSUPERVISED_EPOCHS
@@ -1525,79 +1637,216 @@ if __name__ == "__main__":
             supervised_learning_rate=(
                 SUPERVISED_LEARNING_RATE
             ),
-            model_path=(
-                PRETRAINED_MODEL_PATH
-            ),
-            label_to_index=label_to_index,
-            index_to_label=index_to_label
-        )
-    )
-
-    pretrained_test_results = (
-        training_pipeline.test_model(
-            model=pretrained_fine_tuned_model,
-            test_loader=supervised_test_loader,
             model_name=(
-                "Pretrained and fine-tuned Transformer"
+                PRETRAINED_MODEL_NAME
             ),
-            index_to_label=index_to_label
+            label_to_index=(
+                label_to_index
+            ),
+            index_to_label=(
+                index_to_label
+            )
         )
     )
 
-    training_pipeline.save_test_results_pdf(
-        test_results=pretrained_test_results,
-        file_path=(
-            PRETRAINED_RESULTS_PDF_PATH
-        ),
-        index_to_label=index_to_label
+    # Retrieve trained model
+    pretrained_fine_tuned_model = (
+        pretrained_results[
+            "model"
+        ]
     )
 
-    # Train and evaluate the model with supervised fine-tuning only
+    # Print unsupervised training history
+    print(
+        "\nUnsupervised Pretraining"
+    )
+
+    print("=" * 70)
+
+    for epoch_results in (
+        pretrained_results[
+            "unsupervised_results"
+        ]["history"]
+    ):
+
+        print(
+            f"Epoch "
+            f"{epoch_results['epoch']} | "
+            f"Training loss: "
+            f"{epoch_results['training_loss']:.6f} | "
+            f"Validation loss: "
+            f"{epoch_results['validation_loss']:.6f}"
+        )
+
+
+    print(
+        "\nBest unsupervised validation loss:",
+        pretrained_results[
+            "unsupervised_results"
+        ][
+            "best_validation_loss"
+        ]
+    )
+
+    print(
+        "Best unsupervised epoch:",
+        pretrained_results[
+            "unsupervised_results"
+        ][
+            "best_epoch"
+        ]
+    )
+
+    # Print supervised fine-tuning history
+    print(
+        "\nSupervised Fine-Tuning"
+    )
+
+    print("=" * 70)
+
+    for epoch_results in (
+        pretrained_results[
+            "supervised_results"
+        ]["history"]
+    ):
+
+        print(
+            f"Epoch "
+            f"{epoch_results['epoch']} | "
+            f"Training loss: "
+            f"{epoch_results['training_loss']:.6f} | "
+            f"Training accuracy: "
+            f"{epoch_results['training_accuracy'] * 100:.2f}% | "
+            f"Validation loss: "
+            f"{epoch_results['validation_loss']:.6f} | "
+            f"Validation accuracy: "
+            f"{epoch_results['validation_accuracy'] * 100:.2f}%"
+        )
+
+
+    print(
+        "\nBest supervised validation loss:",
+        pretrained_results[
+            "supervised_results"
+        ][
+            "best_validation_loss"
+        ]
+    )
+
+    print(
+        "Best supervised validation accuracy:",
+        (
+            pretrained_results[
+                "supervised_results"
+            ][
+                "best_validation_accuracy"
+            ]
+            * 100
+        )
+    )
+
+    print(
+        "Best supervised epoch:",
+        pretrained_results[
+            "supervised_results"
+        ][
+            "best_epoch"
+        ]
+    )
+
+    # Supervised-only training
     print("\n")
     print("#" * 70)
+
     print(
         "MODEL 2: SUPERVISED-ONLY TRAINING"
     )
+
     print("#" * 70)
 
-    supervised_only_model = (
+
+    supervised_only_results = (
         training_pipeline
         .train_supervised_only_model(
+            sample_batch=sample_batch,
             supervised_training_loader=(
-                supervised_train_loader
+                supervised_training_loader
             ),
             supervised_validation_loader=(
-                supervised_val_loader
+                supervised_validation_loader
             ),
             epochs=SUPERVISED_EPOCHS,
             learning_rate=(
                 SUPERVISED_LEARNING_RATE
             ),
-            model_path=(
-                SUPERVISED_ONLY_MODEL_PATH
-            ),
-            label_to_index=label_to_index,
-            index_to_label=index_to_label
-        )
-    )
-
-    supervised_only_test_results = (
-        training_pipeline.test_model(
-            model=supervised_only_model,
-            test_loader=supervised_test_loader,
             model_name=(
-                "Supervised-only Transformer"
+                SUPERVISED_ONLY_MODEL_NAME
             ),
-            index_to_label=index_to_label
+            label_to_index=(
+                label_to_index
+            ),
+            index_to_label=(
+                index_to_label
+            )
         )
     )
 
-    training_pipeline.save_test_results_pdf(
-        test_results=(
-            supervised_only_test_results
-        ),
-        file_path=(
-            SUPERVISED_ONLY_RESULTS_PDF_PATH
-        ),
-        index_to_label=index_to_label
+    # Retrieve supervised-only model
+    supervised_only_model = (
+        supervised_only_results[
+            "model"
+        ]
+    )
+
+    # Print supervised-only training history
+    print(
+        "\nSupervised-Only Training"
+    )
+
+    print("=" * 70)
+
+    for epoch_results in (
+        supervised_only_results[
+            "history"
+        ]
+    ):
+
+        print(
+            f"Epoch "
+            f"{epoch_results['epoch']} | "
+            f"Training loss: "
+            f"{epoch_results['training_loss']:.6f} | "
+            f"Training accuracy: "
+            f"{epoch_results['training_accuracy'] * 100:.2f}% | "
+            f"Validation loss: "
+            f"{epoch_results['validation_loss']:.6f} | "
+            f"Validation accuracy: "
+            f"{epoch_results['validation_accuracy'] * 100:.2f}%"
+        )
+
+
+    print(
+        "\nBest supervised-only "
+        "validation loss:",
+        supervised_only_results[
+            "best_validation_loss"
+        ]
+    )
+
+    print(
+        "Best supervised-only "
+        "validation accuracy:",
+        (
+            supervised_only_results[
+                "best_validation_accuracy"
+            ]
+            * 100
+        )
+    )
+
+    print(
+        "Best supervised-only epoch:",
+        supervised_only_results[
+            "best_epoch"
+        ]
     )
