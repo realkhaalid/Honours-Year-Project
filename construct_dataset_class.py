@@ -24,7 +24,6 @@ from data_processing_pipeline import (
     convert_to_cqt_spectrogram
 )
 
-
 # Ignore selected Librosa warnings
 warnings.filterwarnings(
     "ignore",
@@ -682,9 +681,8 @@ def create_datasets(
     maximum_tracks=MAXIMUM_TRACKS
 ):
     """
-    Creates datasets using the official
-    Slakh train, validation, and test
-    partitions.
+    Creates train, validation, and test
+    datasets for testing
     """
 
     training_files = (
@@ -808,6 +806,225 @@ def create_datasets(
         label_to_index_val,
         label_to_index_test
     )
+
+def create_train_val_datasets(
+    training_path,
+    validation_path,
+    data_representation=(
+        convert_to_mel_spectrogram
+    ),
+    set_limit=SET_TRACK_LIMIT,
+    maximum_tracks=MAXIMUM_TRACKS 
+):
+    """
+    Create train and validation dataset for external use
+    """
+
+    training_files = (
+        collect_supervised_audio_files(
+            training_path,
+            set_limit=set_limit,
+            maximum_tracks=(
+                maximum_tracks
+            )
+        )
+    )
+
+    (
+        unsupervised_training_files,
+        supervised_training_files
+    ) = split_training_files(
+        training_files
+    )
+
+    validation_files = (
+        collect_supervised_audio_files(
+            validation_path,
+            set_limit=set_limit,
+            maximum_tracks=(
+                maximum_tracks
+            )
+        )
+    )
+
+    (
+        unsupervised_validation_files,
+        supervised_validation_files
+    ) = split_training_files(
+        validation_files
+    )
+
+    label_to_index = (
+        create_label_mapping(
+            training_files
+        )
+    )
+
+    label_to_index_val = (
+        create_label_mapping(
+            validation_files
+        )
+    )
+
+    supervised_training_dataset = (
+        SupervisedAudioDataset(
+            supervised_training_files,
+            label_to_index,
+            data_representation=(
+                data_representation
+            )
+        )
+    )
+
+    supervised_validation_dataset = (
+        SupervisedAudioDataset(
+            supervised_validation_files,
+            label_to_index,
+            data_representation=(
+                data_representation
+            )
+        )
+    )
+
+    unsupervised_training_dataset = (
+        SupervisedAudioDataset(
+            unsupervised_training_files,
+            label_to_index,
+            data_representation=(
+                data_representation
+            )
+        )
+    )
+
+    unsupervised_validation_dataset = (
+        SupervisedAudioDataset(
+            unsupervised_validation_files,
+            label_to_index,
+            data_representation=(
+                data_representation
+            )
+        )
+    )
+
+    return (
+        supervised_training_dataset,
+        supervised_validation_dataset,
+        unsupervised_training_dataset,
+        unsupervised_validation_dataset,
+        label_to_index_val
+    )
+
+def create_supervised_only_train_val_datasets(
+    training_path,
+    validation_path,
+    data_representation=(
+        convert_to_mel_spectrogram
+    ),
+    set_limit=SET_TRACK_LIMIT,
+    maximum_tracks=MAXIMUM_TRACKS  
+):
+    """
+    Create supervised only train and validation datasets for external use
+    """
+
+    training_files = (
+        collect_supervised_audio_files(
+            training_path,
+            set_limit=set_limit,
+            maximum_tracks=(
+                maximum_tracks
+            )
+        )
+    )
+
+    validation_files = (
+        collect_supervised_audio_files(
+            validation_path,
+            set_limit=set_limit,
+            maximum_tracks=(
+                maximum_tracks
+            )
+        )
+    )
+
+    label_to_index = (
+        create_label_mapping(
+            training_files
+        )
+    )
+
+    label_to_index_val = (
+        create_label_mapping(
+            validation_files
+        )
+    )
+
+    supervised_training_dataset = (
+        SupervisedAudioDataset(
+            training_files,
+            label_to_index,
+            data_representation=(
+                data_representation
+            )
+        )
+    )
+
+    supervised_validation_dataset = (
+        SupervisedAudioDataset(
+            validation_files,
+            label_to_index,
+            data_representation=(
+                data_representation
+            )
+        )
+    )
+
+    return (
+        supervised_training_dataset,
+        supervised_validation_dataset,
+        label_to_index_val
+    )
+
+
+def create_test_dataset(
+    test_path,
+    data_representation=(
+        convert_to_mel_spectrogram
+    ),
+    set_limit=SET_TRACK_LIMIT,
+    maximum_tracks=MAXIMUM_TRACKS
+):
+    """
+    Create test dataset for external use
+    """
+
+    test_files = (
+        collect_supervised_audio_files(
+            test_path,
+            set_limit=set_limit,
+            maximum_tracks=(
+                maximum_tracks
+            )
+        )
+    )
+
+    label_to_index = (
+        create_label_mapping(
+            test_files
+        )
+    )
+
+    test_dataset = (
+        SupervisedAudioDataset(
+            test_files,
+            label_to_index,
+            data_representation=(
+                data_representation
+            )
+        )
+    )
+
+    return test_dataset
 
 
 # Check dataset information

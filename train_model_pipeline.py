@@ -33,6 +33,7 @@ SUPERVISED_EPOCHS = 50
 
 UNSUPERVISED_LEARNING_RATE = 1e-4
 SUPERVISED_LEARNING_RATE = 1e-5
+PATIENCE = 10
 
 CHECKPOINT_INTERVAL = 10
 CHECKPOINT_DIRECTORY = "checkpoints"
@@ -714,7 +715,8 @@ class TrainModelPipeline:
         start_epoch=1,
         best_validation_loss=float("inf"),
         best_epoch=None,
-        best_model_state=None
+        best_model_state=None,
+        patience=PATIENCE
     ):
         """
         Performs masked spectrogram reconstruction.
@@ -747,6 +749,8 @@ class TrainModelPipeline:
                 )
             )
 
+        patience_count = 0
+
         for epoch in tqdm(range(
             start_epoch,
             epochs + 1
@@ -768,8 +772,7 @@ class TrainModelPipeline:
             )
 
             if (
-                validation_loss
-                < best_validation_loss
+                validation_loss < best_validation_loss
             ):
 
                 best_validation_loss = (
@@ -783,6 +786,12 @@ class TrainModelPipeline:
                         model
                     )
                 )
+
+                patience_count = 0
+
+            else:
+
+                patience_count += 1
 
             history.append({
                 "epoch":
@@ -838,6 +847,16 @@ class TrainModelPipeline:
                 latest_checkpoint_paths.append(
                     checkpoint_path
                 )
+
+            if (
+                patience_count >= patience
+            ):
+                    
+                print(
+                        "Validation loss early stop activated"
+                )
+
+                break
 
         model.load_state_dict(
             best_model_state
@@ -1084,7 +1103,8 @@ class TrainModelPipeline:
         best_validation_loss=float("inf"),
         best_validation_accuracy=0.0,
         best_epoch=None,
-        best_model_state=None
+        best_model_state=None,
+        patience=PATIENCE
     ):
         """
         Performs supervised instrument
@@ -1116,6 +1136,8 @@ class TrainModelPipeline:
                     model
                 )
             )
+
+        patience_count = 0
 
         for epoch in tqdm(range(
             start_epoch,
@@ -1163,6 +1185,12 @@ class TrainModelPipeline:
                         model
                     )
                 )
+
+                patience_count = 0
+
+            else:
+
+                patience_count += 1
 
             history.append({
                 "epoch":
@@ -1230,6 +1258,16 @@ class TrainModelPipeline:
                 latest_checkpoint_paths.append(
                     checkpoint_path
                 )
+                            
+            if (
+                patience_count >= patience
+            ):
+                                
+                print(
+                    "Validation loss early stop activated"
+                )
+                                
+                break
 
         model.load_state_dict(
             best_model_state
