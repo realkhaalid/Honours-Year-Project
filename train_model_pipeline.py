@@ -1636,161 +1636,161 @@ if __name__ == "__main__":
         )
 
     # Unsupervised pretraining + supervised fine-tuning
-    print("\n")
-    print("#" * 70)
+    # print("\n")
+    # print("#" * 70)
 
-    print(
-        "MODEL 1: UNSUPERVISED PRETRAINING "
-        "FOLLOWED BY SUPERVISED FINE-TUNING"
-    )
+    # print(
+    #     "MODEL 1: UNSUPERVISED PRETRAINING "
+    #     "FOLLOWED BY SUPERVISED FINE-TUNING"
+    # )
 
-    print("#" * 70)
-
-
-    pretrained_results = (
-        training_pipeline
-        .train_pretrained_and_fine_tuned_model(
-            sample_batch=sample_batch,
-            unsupervised_training_loader=(
-                unsupervised_training_loader
-            ),
-            unsupervised_validation_loader=(
-                unsupervised_validation_loader
-            ),
-            supervised_training_loader=(
-                supervised_training_loader
-            ),
-            supervised_validation_loader=(
-                supervised_validation_loader
-            ),
-            unsupervised_epochs=(
-                UNSUPERVISED_EPOCHS
-            ),
-            supervised_epochs=(
-                SUPERVISED_EPOCHS
-            ),
-            unsupervised_learning_rate=(
-                UNSUPERVISED_LEARNING_RATE
-            ),
-            supervised_learning_rate=(
-                SUPERVISED_LEARNING_RATE
-            ),
-            model_name=(
-                PRETRAINED_MODEL_NAME
-            ),
-            label_to_index=(
-                label_to_index
-            ),
-            index_to_label=(
-                index_to_label
-            )
-        )
-    )
-
-    # Retrieve trained model
-    pretrained_fine_tuned_model = (
-        pretrained_results[
-            "model"
-        ]
-    )
-
-    # Print unsupervised training history
-    print(
-        "\nUnsupervised Pretraining"
-    )
-
-    print("=" * 70)
-
-    for epoch_results in (
-        pretrained_results[
-            "unsupervised_results"
-        ]["history"]
-    ):
-
-        print(
-            f"Epoch "
-            f"{epoch_results['epoch']} | "
-            f"Training loss: "
-            f"{epoch_results['training_loss']:.6f} | "
-            f"Validation loss: "
-            f"{epoch_results['validation_loss']:.6f}"
-        )
+    # print("#" * 70)
 
 
-    print(
-        "\nBest unsupervised validation loss:",
-        pretrained_results[
-            "unsupervised_results"
-        ][
-            "best_validation_loss"
-        ]
-    )
+    # pretrained_results = (
+    #     training_pipeline
+    #     .train_pretrained_and_fine_tuned_model(
+    #         sample_batch=sample_batch,
+    #         unsupervised_training_loader=(
+    #             unsupervised_training_loader
+    #         ),
+    #         unsupervised_validation_loader=(
+    #             unsupervised_validation_loader
+    #         ),
+    #         supervised_training_loader=(
+    #             supervised_training_loader
+    #         ),
+    #         supervised_validation_loader=(
+    #             supervised_validation_loader
+    #         ),
+    #         unsupervised_epochs=(
+    #             UNSUPERVISED_EPOCHS
+    #         ),
+    #         supervised_epochs=(
+    #             SUPERVISED_EPOCHS
+    #         ),
+    #         unsupervised_learning_rate=(
+    #             UNSUPERVISED_LEARNING_RATE
+    #         ),
+    #         supervised_learning_rate=(
+    #             SUPERVISED_LEARNING_RATE
+    #         ),
+    #         model_name=(
+    #             PRETRAINED_MODEL_NAME
+    #         ),
+    #         label_to_index=(
+    #             label_to_index
+    #         ),
+    #         index_to_label=(
+    #             index_to_label
+    #         )
+    #     )
+    # )
 
-    print(
-        "Best unsupervised epoch:",
-        pretrained_results[
-            "unsupervised_results"
-        ][
-            "best_epoch"
-        ]
-    )
+    # # Retrieve trained model
+    # pretrained_fine_tuned_model = (
+    #     pretrained_results[
+    #         "model"
+    #     ]
+    # )
 
-    # Print supervised fine-tuning history
-    print(
-        "\nSupervised Fine-Tuning"
-    )
+    # # Print unsupervised training history
+    # print(
+    #     "\nUnsupervised Pretraining"
+    # )
 
-    print("=" * 70)
+    # print("=" * 70)
 
-    for epoch_results in (
-        pretrained_results[
-            "supervised_results"
-        ]["history"]
-    ):
+    # for epoch_results in (
+    #     pretrained_results[
+    #         "unsupervised_results"
+    #     ]["history"]
+    # ):
 
-        print(
-            f"Epoch "
-            f"{epoch_results['epoch']} | "
-            f"Training loss: "
-            f"{epoch_results['training_loss']:.6f} | "
-            f"Training accuracy: "
-            f"{epoch_results['training_accuracy'] * 100:.2f}% | "
-            f"Validation loss: "
-            f"{epoch_results['validation_loss']:.6f} | "
-            f"Validation accuracy: "
-            f"{epoch_results['validation_accuracy'] * 100:.2f}%"
-        )
+    #     print(
+    #         f"Epoch "
+    #         f"{epoch_results['epoch']} | "
+    #         f"Training loss: "
+    #         f"{epoch_results['training_loss']:.6f} | "
+    #         f"Validation loss: "
+    #         f"{epoch_results['validation_loss']:.6f}"
+    #     )
 
 
-    print(
-        "\nBest supervised validation loss:",
-        pretrained_results[
-            "supervised_results"
-        ][
-            "best_validation_loss"
-        ]
-    )
+    # print(
+    #     "\nBest unsupervised validation loss:",
+    #     pretrained_results[
+    #         "unsupervised_results"
+    #     ][
+    #         "best_validation_loss"
+    #     ]
+    # )
 
-    print(
-        "Best supervised validation accuracy:",
-        (
-            pretrained_results[
-                "supervised_results"
-            ][
-                "best_validation_accuracy"
-            ]
-            * 100
-        )
-    )
+    # print(
+    #     "Best unsupervised epoch:",
+    #     pretrained_results[
+    #         "unsupervised_results"
+    #     ][
+    #         "best_epoch"
+    #     ]
+    # )
 
-    print(
-        "Best supervised epoch:",
-        pretrained_results[
-            "supervised_results"
-        ][
-            "best_epoch"
-        ]
-    )
+    # # Print supervised fine-tuning history
+    # print(
+    #     "\nSupervised Fine-Tuning"
+    # )
+
+    # print("=" * 70)
+
+    # for epoch_results in (
+    #     pretrained_results[
+    #         "supervised_results"
+    #     ]["history"]
+    # ):
+
+    #     print(
+    #         f"Epoch "
+    #         f"{epoch_results['epoch']} | "
+    #         f"Training loss: "
+    #         f"{epoch_results['training_loss']:.6f} | "
+    #         f"Training accuracy: "
+    #         f"{epoch_results['training_accuracy'] * 100:.2f}% | "
+    #         f"Validation loss: "
+    #         f"{epoch_results['validation_loss']:.6f} | "
+    #         f"Validation accuracy: "
+    #         f"{epoch_results['validation_accuracy'] * 100:.2f}%"
+    #     )
+
+
+    # print(
+    #     "\nBest supervised validation loss:",
+    #     pretrained_results[
+    #         "supervised_results"
+    #     ][
+    #         "best_validation_loss"
+    #     ]
+    # )
+
+    # print(
+    #     "Best supervised validation accuracy:",
+    #     (
+    #         pretrained_results[
+    #             "supervised_results"
+    #         ][
+    #             "best_validation_accuracy"
+    #         ]
+    #         * 100
+    #     )
+    # )
+
+    # print(
+    #     "Best supervised epoch:",
+    #     pretrained_results[
+    #         "supervised_results"
+    #     ][
+    #         "best_epoch"
+    #     ]
+    # )
 
     # Supervised-only training
     print("\n")
