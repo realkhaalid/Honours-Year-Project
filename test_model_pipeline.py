@@ -14,7 +14,9 @@ from sklearn.metrics import (
 from transformer_model_class import Transformer
 
 from data_processing_pipeline import (
-    convert_to_mel_spectrogram
+    convert_to_mel_spectrogram,
+    convert_to_stft_spectrogram,
+    convert_to_cqt_spectrogram
 )
 
 from construct_dataset_class import (
@@ -27,11 +29,11 @@ from construct_dataset_class import (
 BATCH_SIZE = 16
 
 DATA_REPRESENTATION = (
-    convert_to_mel_spectrogram
+    convert_to_stft_spectrogram
 )
 
 CHECKPOINT_PATH = Path(
-    "checkpoints/mel_supervised_only_test_supervised_best.pt"
+    "checkpoints/stft_supervised_only_test_supervised_best.pt"
 )
 
 class TestModelPipeline:

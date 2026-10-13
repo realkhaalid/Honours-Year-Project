@@ -1,6 +1,4 @@
-import numpy as np
 import torch
-import math
 
 def create_patch_mask(
     patches,

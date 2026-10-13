@@ -1,6 +1,4 @@
-import numpy as np
 import torch
-import math
 
 def average_pooling(encoder_output):
     pooled_output = encoder_output.mean(dim=1)

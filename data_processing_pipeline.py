@@ -83,69 +83,6 @@ def find_audio_files(
             f"{dataset_path}"
         )
 
-    if not supervised:
-
-        track_folders = []
-
-        for folder in dataset_path.iterdir():
-
-            if folder.is_dir():
-
-                track_folders.append(
-                    folder
-                )
-
-                if (
-                    set_limit
-                    and len(track_folders)
-                    >= maximum_files
-                ):
-                    break
-
-        track_folders = sorted(
-            track_folders
-        )
-
-        audio_files = []
-
-        for track_folder in track_folders:
-
-            stems_folder = (
-                track_folder
-                / "stems"
-            )
-
-            if not stems_folder.exists():
-
-                print(
-                    f"Stems folder missing: "
-                    f"{track_folder.name}"
-                )
-
-                continue
-
-            for stem_file in (
-                stems_folder.iterdir()
-            ):
-
-                if (
-                    stem_file.is_file()
-                    and stem_file.suffix.lower()
-                    in SUPPORTED_EXTENSIONS
-                    and not stem_file.name.startswith(
-                        "._"
-                    )
-                ):
-                    audio_files.append(
-                        stem_file
-                    )
-
-        audio_files = sorted(
-            audio_files
-        )
-
-        return audio_files
-
     track_folders = []
 
     for folder in dataset_path.iterdir():
@@ -1019,7 +956,8 @@ if __name__ == "__main__":
 
     unsupervised_audio_files = (
         find_audio_files(
-            SLAKH2100_REDUX_16K_TRAIN
+            SLAKH2100_REDUX_16K_TRAIN,
+            supervised=True
         )
     )
 
@@ -1036,7 +974,7 @@ if __name__ == "__main__":
     invalid_count = 0
     check_count = 0
 
-    for audio_file in (
+    for audio_file, _ in (
         unsupervised_audio_files
     ):
 
